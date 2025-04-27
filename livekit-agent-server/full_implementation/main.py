@@ -76,7 +76,8 @@ class Assistant(Agent):
 
 # Global variables to store agent configuration
 # These must be accessible from all processes
-GLOBAL_PAGE_PATH = "vocabpage"  # Default to vocabpage
+# Initialize with None so we can tell if it's been properly set
+GLOBAL_PAGE_PATH = None  # Will be set via CLI args or defaults to None
 GLOBAL_ENABLE_TOOLS = True  # Enable or disable tools
 GLOBAL_PERSONA_CONFIG = None  # Will be populated from agent_config_loader
 
@@ -92,15 +93,26 @@ async def entrypoint(ctx: agents.JobContext):
     logger.info("Initializing HTTP client for external API calls")
     await initialize()
     
-    # Use the global page path
-    page_path = GLOBAL_PAGE_PATH
+    # Check if we have a page path in the environment variable (set by parent process)
+    env_page_path = os.environ.get("LIVEKIT_AGENT_PAGE_PATH")
+    
+    # If we have a path in the environment, use that instead of the global
+    if env_page_path:
+        page_path = env_page_path
+        # Update the global to match
+        GLOBAL_PAGE_PATH = env_page_path
+        logger.info(f"Using page path from environment: {page_path}")
+    else:
+        # Use the global page path (though this shouldn't happen now)
+        page_path = GLOBAL_PAGE_PATH
+        logger.info(f"Using global page path: {page_path}")
     
     # Debug page being used
     logger.info(f"Agent intended for page: http://localhost:3000/{page_path}")
     
     if page_path is None:
-        # This shouldn't happen, but let's be defensive
-        logger.error("GLOBAL_PAGE_PATH is None in entrypoint, this is a bug!")
+        # This shouldn't happen now, but let's be defensive
+        logger.error("Page path is None in entrypoint, this is a bug!")
         # Set a default value to avoid crashes
         page_path = "vocabpage"  # Default to vocabpage as requested
         GLOBAL_PAGE_PATH = page_path
@@ -514,6 +526,9 @@ if __name__ == "__main__":
         # If no page path is provided, default to vocabpage as requested
         GLOBAL_PAGE_PATH = "vocabpage"
         logging.info(f"No page path provided, defaulting to: {GLOBAL_PAGE_PATH}")
+        
+    # Write the page path to a temporary environment variable to pass it to child processes
+    os.environ["LIVEKIT_AGENT_PAGE_PATH"] = GLOBAL_PAGE_PATH
 
     # Set web URL in Chrome (currently disabled due to 'Room' object has no attribute 'client')
     # These are not used and are likely causing errors
