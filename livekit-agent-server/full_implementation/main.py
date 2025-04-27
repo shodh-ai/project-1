@@ -426,7 +426,34 @@ async def entrypoint(ctx: agents.JobContext):
     
     try:
         # Keep the agent running until session ends or an exception occurs
-        await ctx.wait_for_disconnect()
+        # Different LiveKit versions use different methods for waiting
+        try:
+            # Try newer method first
+            await ctx.wait_for_disconnect()
+        except (AttributeError, TypeError):
+            # Fall back to alternative approach
+            logger.info("Using alternative wait mechanism")
+            # Create a future that never completes unless cancelled
+            disconnect_future = asyncio.Future()
+            
+            # Create a handler to cancel the future when the room disconnects
+            def on_room_disconnect(*args, **kwargs):
+                if not disconnect_future.done():
+                    disconnect_future.set_result(None)
+            
+            # Register the disconnect handler if possible
+            try:
+                ctx.room.on("disconnected", on_room_disconnect)
+            except Exception as e:
+                logger.warning(f"Could not register disconnect handler: {e}")
+            
+            # Wait until the future is cancelled or completed
+            try:
+                await disconnect_future
+            except asyncio.CancelledError:
+                logger.info("Wait future cancelled")
+    except Exception as e:
+        logger.error(f"Error in room connection: {e}")
     finally:
         # Cleanup resources when the session ends
         logger.info("Cleaning up resources")

@@ -176,6 +176,13 @@ def get_persona_config_for_page(page_path: str) -> PersonaConfig:
         if speaking_teacher in personas:
             logger.info(f"Using {speaking_teacher} for {page_path} (special case mapping)")
             return personas[speaking_teacher]
+            
+    # Special case for vocabpage and vocab - we specifically want the vocab teacher
+    if base_name in ['vocab'] or page_path in ['vocabpage', 'vocabulary']:
+        vocab_teacher = 'vocab-teacher-default'
+        if vocab_teacher in personas:
+            logger.info(f"Using {vocab_teacher} for {page_path} (special case mapping)")
+            return personas[vocab_teacher]
     
     # Try looking through all personas for supported_pages that include this page
     for identity, persona in personas.items():
