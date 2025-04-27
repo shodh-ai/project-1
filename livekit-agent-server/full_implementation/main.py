@@ -75,14 +75,19 @@ class Assistant(Agent):
 
 
 # Global variables to store agent configuration
-GLOBAL_PAGE_PATH = 'speakingpage'  # Default to speakingpage
+# These must be accessible from all processes
+GLOBAL_PAGE_PATH = "vocabpage"  # Default to vocabpage
 GLOBAL_ENABLE_TOOLS = True  # Enable or disable tools
-
-# Will be populated from agent_config_loader based on page path - initialize with None
-global GLOBAL_PERSONA_CONFIG
-GLOBAL_PERSONA_CONFIG = None
+GLOBAL_PERSONA_CONFIG = None  # Will be populated from agent_config_loader
 
 async def entrypoint(ctx: agents.JobContext):
+    """Main entrypoint for the agent."""
+    # Access global variables
+    global GLOBAL_PAGE_PATH, GLOBAL_PERSONA_CONFIG, GLOBAL_ENABLE_TOOLS
+    
+    # Log agent connection information
+    logger.info(f"Connected to LiveKit room '{ctx.room.name}'")
+    
     # Initialize the HTTP client for service API calls
     logger.info("Initializing HTTP client for external API calls")
     await initialize()
@@ -90,13 +95,24 @@ async def entrypoint(ctx: agents.JobContext):
     # Use the global page path
     page_path = GLOBAL_PAGE_PATH
     
+    # Debug page being used
+    logger.info(f"Agent intended for page: http://localhost:3000/{page_path}")
+    
+    if page_path is None:
+        # This shouldn't happen, but let's be defensive
+        logger.error("GLOBAL_PAGE_PATH is None in entrypoint, this is a bug!")
+        # Set a default value to avoid crashes
+        page_path = "vocabpage"  # Default to vocabpage as requested
+        GLOBAL_PAGE_PATH = page_path
+        logger.warning(f"Setting default page_path to: {page_path}")
+    
     # Get persona configuration based on page path
     global GLOBAL_PERSONA_CONFIG
     GLOBAL_PERSONA_CONFIG = get_persona_config_for_page(page_path)
     
-    # Simply log the intended URL - no need to set it directly
-    # The web browser will handle navigation based on the UI
-    logger.info(f"Agent intended for page: http://localhost:3000/{page_path}")
+    # Force-reload the correct persona for the actual page path to avoid any inconsistencies
+    GLOBAL_PERSONA_CONFIG = get_persona_config_for_page(page_path)
+    logger.info(f"Using persona '{GLOBAL_PERSONA_CONFIG.identity}' from page_path: {page_path}")
     
     # Log the loaded persona configuration
     logger.info(f"Using persona '{GLOBAL_PERSONA_CONFIG.identity}' for page '{page_path}'")
@@ -147,6 +163,12 @@ async def entrypoint(ctx: agents.JobContext):
                 # Update session state
                 session_state.update_persona_config(persona_config)
                 session_state.update_page_type(page_type)
+                
+                # Update GLOBAL variables to maintain consistency
+                global GLOBAL_PAGE_PATH, GLOBAL_PERSONA_CONFIG
+                GLOBAL_PAGE_PATH = page_type
+                GLOBAL_PERSONA_CONFIG = persona_config
+                logger.info(f"Updated global configuration to: page={page_type}, persona={persona_config.identity}")
                 
                 # Register tools with the model
                 if tools:
@@ -264,7 +286,16 @@ async def entrypoint(ctx: agents.JobContext):
         # Initialize session state
         session_state = get_or_create_session_state(ctx.room.name, session)
         session_state.update_persona_config(GLOBAL_PERSONA_CONFIG)
-        session_state.update_page_type(page_path)
+        
+        # Make sure we're using the correct global page path
+        # Check if GLOBAL_PAGE_PATH is still None - which shouldn't happen
+        if GLOBAL_PAGE_PATH is None:
+            logger.error("Critical error: GLOBAL_PAGE_PATH is None in session initialization")
+            GLOBAL_PAGE_PATH = "vocabpage"  # Set to vocabpage as requested
+            logger.warning(f"Force-setting GLOBAL_PAGE_PATH to: {GLOBAL_PAGE_PATH}")
+            
+        session_state.update_page_type(GLOBAL_PAGE_PATH)
+        logger.info(f"Setting session page type to: {GLOBAL_PAGE_PATH}")
         
         # Register tools if enabled
         if GLOBAL_ENABLE_TOOLS:
@@ -287,7 +318,7 @@ async def entrypoint(ctx: agents.JobContext):
         logger.info("Using pattern matching for commands instead of tools")
     
     # Log persona details
-    logger.info(f"Using persona '{GLOBAL_PERSONA_CONFIG.identity}' for {GLOBAL_PAGE_PATH}")
+    logger.info(f"Using persona '{GLOBAL_PERSONA_CONFIG.identity}' for {page_path}")
     
     # Start the agent session in the specified room
     # Note: Not using tools since they aren't supported in the current API
@@ -478,7 +509,11 @@ if __name__ == "__main__":
     # Set up agent configuration from command line arguments
     if args.page_path:
         GLOBAL_PAGE_PATH = args.page_path
-        logging.info(f"Using page path: {GLOBAL_PAGE_PATH}")
+        logging.info(f"Using page path from CLI args: {GLOBAL_PAGE_PATH}")
+    else:
+        # If no page path is provided, default to vocabpage as requested
+        GLOBAL_PAGE_PATH = "vocabpage"
+        logging.info(f"No page path provided, defaulting to: {GLOBAL_PAGE_PATH}")
 
     # Set web URL in Chrome (currently disabled due to 'Room' object has no attribute 'client')
     # These are not used and are likely causing errors
@@ -490,7 +525,12 @@ if __name__ == "__main__":
     logging.info(f"Agent intended for page: http://localhost:3000/{GLOBAL_PAGE_PATH}")
     
     # Initialize the persona configuration before applying overrides
+    if not GLOBAL_PAGE_PATH:
+        logger.error("No page path specified! Defaulting to vocabpage")
+        GLOBAL_PAGE_PATH = "vocabpage"  # Default to vocabpage as requested
+    
     GLOBAL_PERSONA_CONFIG = get_persona_config_for_page(GLOBAL_PAGE_PATH)
+    logger.info(f"Initial configuration with persona '{GLOBAL_PERSONA_CONFIG.identity}' for page '{GLOBAL_PAGE_PATH}'")
     
     # Create a copy of the config that we can modify
     config_dict = GLOBAL_PERSONA_CONFIG.to_dict()

@@ -142,6 +142,11 @@ def get_persona_config_for_page(page_path: str) -> PersonaConfig:
     Returns:
         The appropriate PersonaConfig, or a default if none found
     """
+    # Handle None values
+    if page_path is None:
+        logger.warning("No page path provided, using 'vocabpage' as default")
+        page_path = 'vocabpage'
+        
     # Normalize the page path
     page_path = page_path.lower().strip().replace('/', '')
     
