@@ -23,7 +23,9 @@ from ai.gemini_client import (
     remove_session_state,
     initialize_gemini_model,
     register_tools_with_model,
-    reinitialize_chat
+    reinitialize_chat,
+    send_message,
+    send_function_response
 )
 
 # Import the tool dispatcher
@@ -203,77 +205,62 @@ async def entrypoint(ctx: agents.JobContext):
             
     # Define a synchronous wrapper for the data handler
     def on_data_received_sync(payload, participant=None, kind=None):
-        # Use a regular function (not async) for the event listener
         try:
-            nonlocal received_review_text
-            try:
-                # Try to decode as plain text
-                text = payload.decode('utf-8')
-                logger.debug(f"Received data payload of {len(text)} bytes")
+            # Log the type of payload received
+            logger.info(f"TIMER-DEBUG: Received payload kind={kind}")
+            
+            if kind == "data":
+                # Only process actual data messages (not media chunks)
+                logger.info(f"TIMER-DEBUG: Processing data payload")
                 
-                # Try to parse as JSON
                 try:
-                    data = json.loads(text)
+                    # Try to decode as plain text
+                    text = payload.decode('utf-8')
+                    logger.info(f"TIMER-DEBUG: Decoded text of length {len(text)} bytes")
                     
-                    # Handle context change messages
-                    if isinstance(data, dict) and data.get('type') == 'CHANGE_CONTEXT':
-                        logger.info("Received CHANGE_CONTEXT message")
+                    # Try to parse as JSON
+                    try:
+                        data = json.loads(text)
                         
-                        # Extract context data
-                        payload = data.get('payload', {})
-                        page_type = payload.get('pageType')
-                        task_id = payload.get('taskId')
-                        persona_identity = payload.get('personaIdentity')
+                        # Handle context change messages
+                        if isinstance(data, dict) and data.get('type') == 'CHANGE_CONTEXT':
+                            logger.info("Received CHANGE_CONTEXT message")
+                            
+                            # Extract context data
+                            payload = data.get('payload', {})
+                            page_type = payload.get('pageType')
+                            task_id = payload.get('taskId')
+                            persona_identity = payload.get('personaIdentity')
+                            
+                            # Create a task to handle the context change
+                            if page_type:
+                                asyncio.create_task(handle_context_change(page_type, task_id, persona_identity))
+                            else:
+                                logger.error("Missing pageType in CHANGE_CONTEXT message")
                         
-                        # Create a task to handle the context change
-                        if page_type:
-                            asyncio.create_task(handle_context_change(page_type, task_id, persona_identity))
-                        else:
-                            logger.error("Missing pageType in CHANGE_CONTEXT message")
-                        return
-                    
-                    # Handle the original content extraction logic
-                    elif isinstance(data, dict) and 'content' in data:
-                        text = data['content']
-                        logger.debug(f"Extracted content from JSON payload: {text[:100]}...")
-                except json.JSONDecodeError:
-                    # Not JSON, just use the raw text
-                    logger.debug(f"Using raw text payload: {text[:100]}...")
-                    
-                received_review_text = text
-                logger.debug(f"Successfully stored review text of length: {len(received_review_text)}")
-                
-                # Create a task for async work (original behavior)
-                if session:
-                    logger.debug("Session available, sending text to agent...")
-                    
-                    # Define an async function to be called as a task
-                    async def process_text():
-                        try:
-                            await session.send_text(f"I've received your presentation to review with {len(text)} characters. Here's my feedback: {text}")
-                        except Exception as e:
-                            logger.error(f"Error sending text to agent: {e}")
-                    
-                    # Create a task to run the async function
-                    asyncio.create_task(process_text())
-                else:
-                    logger.warning("Session not available, cannot send text to agent")
-            except Exception as e:
-                logger.error(f"Error processing payload: {e}")
+                        # Other data message types can be processed here
+                        # Note: Speech audio is NOT processed here - it's handled by the RealtimeModel internally
+                        
+                    except json.JSONDecodeError:
+                        # Not JSON, just log it
+                        logger.debug(f"Non-JSON data message received: {text[:100]}...")
+                        
+                except Exception as e:
+                    logger.error(f"Error processing data payload: {e}")
+            
+            # We're NOT processing media chunks here anymore
+            # Audio is processed internally by the RealtimeModel
+            # Function calls will be detected via the generation_created event
+            
         except Exception as outer_e:
             logger.error(f"Outer exception in on_data_received: {outer_e}")
-    
-    # Register the data handler
-    ctx.room.on("data", on_data_received_sync)
-    
-    # Create the session
-    session = None
+            
+    # Event handlers will be registered after session is created
     
     # Get Google API key from environment
     api_key = os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         logger.error("GOOGLE_API_KEY is not set in the environment")
-        logger.warning("Agent session creation may fail without a valid API key")
     
     # Create the session with the Google realtime model
     try:
@@ -285,7 +272,7 @@ async def entrypoint(ctx: agents.JobContext):
         
         # Create the model with our configuration
         model = google.beta.realtime.RealtimeModel(
-            model="gemini-2.0-flash-exp",  # Use the model that was working before
+            model="gemini-2.0-flash-live-001",  # Using production-ready model with function calling support
             voice=GLOBAL_PERSONA_CONFIG.voice,
             temperature=GLOBAL_PERSONA_CONFIG.temperature,
             instructions=GLOBAL_PERSONA_CONFIG.instructions,
@@ -295,10 +282,141 @@ async def entrypoint(ctx: agents.JobContext):
         session = AgentSession(llm=model)
         logger.info("Created agent session with Google's realtime model")
         
-        # Initialize session state
+        # Initialize session state first to avoid reference errors
         session_state = get_or_create_session_state(ctx.room.name, session)
         session_state.update_persona_config(GLOBAL_PERSONA_CONFIG)
         
+        # Register basic event handlers now that session exists
+        session.on_data_received_sync = on_data_received_sync
+        # on_participant_change is not defined, so we don't register it
+        
+        # Event handlers will be defined at the entrypoint level to properly access session
+
+
+        # First define the event handler, then register it
+        # Handler for the generation_created event
+        async def handle_generation_event(event):
+            """Handle the generation_created event from the LiveKit Google plugin.
+            
+            This function processes function calls from the Gemini model via the function_stream.
+            
+            Args:
+                event: The generation_created event from the LiveKit Google plugin
+            """
+            logger.info(f"TIMER-TEST: handle_generation_event called with event type: {type(event).__name__}")
+            logger.info(f"TIMER-DEBUG: Received Generation event of type {event.__class__.__name__}")
+                    
+            # Get the session and room name from the event context
+            ctx = event.ctx
+            session = ctx.session
+            
+            # Track if any function calls were processed
+            function_calls_processed = False
+            
+            # Consume the function stream to intercept function calls from Gemini
+            if hasattr(event, 'function_stream'):
+                logger.info("TIMER-TEST: Processing function_stream for potential tool calls")
+                async for func_call in event.function_stream:
+                    function_calls_processed = True
+                    logger.info(f"TIMER-TEST: >>> Received function call from stream: {func_call.name}")
+                    logger.info(f"TIMER-TEST: Function call arguments: {func_call.arguments}")
+                    logger.info(f"TIMER-TEST: Function call ID: {func_call.call_id}")
+                    logger.info(f"TIMER-TEST: Function call type: {type(func_call).__name__}")
+                    
+                    try:
+                        # Extract the tool information
+                        tool_name = func_call.name
+                        # The arguments are a JSON string, need to parse them
+                        tool_args = json.loads(func_call.arguments)
+                        
+                        logger.info(f"TIMER-TEST: Calling dispatcher for: {tool_name}")
+                        tool_call_data = {"name": tool_name, "arguments": tool_args}
+                        
+                        # Get the session state for this room
+                        session_state = get_or_create_session_state(ctx.room.name, session)
+                        
+                        # Process the tool call using our existing dispatcher
+                        result = await process_tool_call(session_state, session, tool_call_data)
+                        logger.info(f"TIMER-TEST: Dispatcher returned result: {result}")
+                        
+                        # Convert result to JSON string if it's not already
+                        result_json = json.dumps(result) if not isinstance(result, str) else result
+                        
+                        # Standard LiveKit pattern - Create FunctionCallOutput and append to chat context
+                        from livekit.agents import llm
+                        logger.info(f"TIMER-TEST: Creating FunctionCallOutput for {tool_name}")
+                        
+                        # Add the function result to the chat context
+                        session.chat_ctx.items.append(llm.FunctionCallOutput(
+                            call_id=func_call.call_id,
+                            name=tool_name,
+                            output=result_json,
+                            is_error=False
+                        ))
+                        
+                        # Update the chat context to send the result back to the model
+                        logger.info(f"TIMER-TEST: Updating chat context with function result")
+                        await session.update_chat_ctx(session.chat_ctx)
+                        logger.info(f"TIMER-TEST: Successfully sent result for {tool_name} back to model")
+                        
+                    except Exception as e:
+                        logger.error(f"TIMER-ERROR: Error processing function call {func_call.name}: {str(e)}")
+                        logger.exception(e)
+                        
+                        # Try to send an error response so the model doesn't hang
+                        try:
+                            from livekit.agents import llm
+                            error_msg = f"Error executing {func_call.name}: {str(e)}"
+                            
+                            # Add error result to chat context
+                            session.chat_ctx.items.append(llm.FunctionCallOutput(
+                                call_id=func_call.call_id,
+                                name=func_call.name,
+                                output=json.dumps({"error": error_msg}),
+                                is_error=True
+                            ))
+                            
+                            # Update chat context with error
+                            await session.update_chat_ctx(session.chat_ctx)
+                            logger.info(f"TIMER-TEST: Sent error response for failed {func_call.name} call")
+                        except Exception as inner_e:
+                            logger.error(f"TIMER-ERROR: Failed to send error response: {str(inner_e)}")
+            else:
+                logger.warning("TIMER-WARNING: Event does not have a function_stream attribute")
+            
+            if function_calls_processed:
+                logger.info("TIMER-TEST: All function calls processed, now waiting for model to continue")
+            
+            # Consume the message stream for final text output (if needed)
+            if hasattr(event, 'message_stream'):
+                logger.info("TIMER-DEBUG: Processing message stream for text output")
+                async for message_gen in event.message_stream:
+                    if hasattr(message_gen, 'text_stream'):
+                        logger.info("TIMER-DEBUG: Found text stream, processing chunks")
+                        # Collect all text chunks to form complete messages
+                        complete_message = ""
+                        async for text_chunk in message_gen.text_stream:
+                            logger.info(f"TIMER-DEBUG: Received text chunk: {text_chunk}")
+                            complete_message += text_chunk
+                            
+                            # Send each chunk to the frontend immediately for streaming experience
+                            try:
+                                await session.send_text(text_chunk)
+                                logger.info("TIMER-DEBUG: Sent text chunk to user")
+                            except Exception as e:
+                                logger.error(f"TIMER-ERROR: Error sending text to user: {str(e)}")
+                        
+                        # Log the complete message for debugging
+                        if complete_message:
+                            logger.info(f"TIMER-DEBUG: Complete message after function call: {complete_message}")
+                    elif hasattr(message_gen, 'audio_stream'):
+                        # Handle audio response if present
+                        logger.info("TIMER-DEBUG: Found audio stream, audio will be handled by LiveKit")
+                    else:
+                        logger.debug("message_gen does not have text_stream or audio_stream attributes")
+            else:
+                logger.debug("Event does not have a message_stream attribute")
+            
         # Make sure we're using the correct global page path
         # Check if GLOBAL_PAGE_PATH is still None - which shouldn't happen
         if GLOBAL_PAGE_PATH is None:
@@ -315,6 +433,82 @@ async def entrypoint(ctx: agents.JobContext):
             if tools:
                 await register_tools_with_model(session_state, tools)
                 logger.info(f"Registered {len(tools)} tools with Gemini model")
+                
+                # Add deep inspection of tools
+                logger.info("TIMER-DEBUG: Deep inspection of registered tools")
+                for i, tool in enumerate(tools):
+                    logger.info(f"TIMER-DEBUG: Tool {i+1}: {tool}")
+                    logger.info(f"TIMER-DEBUG: Tool {i+1} type: {type(tool)}")
+                    logger.info(f"TIMER-DEBUG: Tool {i+1} dir: {dir(tool)}")
+                    
+                    # If it's a custom FunctionDeclaration, log its to_dict output
+                    if hasattr(tool, 'to_dict'):
+                        try:
+                            tool_dict = tool.to_dict()
+                            logger.info(f"TIMER-DEBUG: Tool {i+1} as dict: {tool_dict}")
+                        except Exception as e:
+                            logger.error(f"TIMER-DEBUG: Error getting tool dict: {e}")
+                
+                # Log RealtimeModel's internals after tool registration
+                if hasattr(model, '_tools'):
+                    logger.info(f"TIMER-DEBUG: Model._tools after registration: {model._tools}")
+                
+                # Check for event emitter methods to see how events are registered
+                if hasattr(model, '_events') or hasattr(model, '_handlers') or hasattr(model, '_listeners'):
+                    events_attr = getattr(model, '_events', None) or getattr(model, '_handlers', None) or getattr(model, '_listeners', None)
+                    if events_attr:
+                        logger.info(f"TIMER-DEBUG: Model events: {events_attr}")
+                        
+                # Try to directly set a callback for function calls if the model has relevant methods
+                if hasattr(model, 'set_function_call_handler') or hasattr(model, 'set_tool_call_handler'):
+                    handler_method = getattr(model, 'set_function_call_handler', None) or getattr(model, 'set_tool_call_handler', None)
+                    if handler_method:
+                        logger.info("TIMER-DEBUG: Found direct function call handler method, registering")
+                        
+                        async def direct_function_call_handler(func_call):
+                            logger.info(f"TIMER-TEST: Direct function call handler triggered: {func_call}")
+                            try:
+                                # Extract the tool name and arguments
+                                tool_name = getattr(func_call, 'name', None)
+                                arguments = getattr(func_call, 'arguments', None) or getattr(func_call, 'args', None)
+                                
+                                if tool_name and arguments:
+                                    logger.info(f"TIMER-TEST: Direct handler processing tool: {tool_name} with args: {arguments}")
+                                    
+                                    # Convert arguments to dict if necessary
+                                    if not isinstance(arguments, dict):
+                                        try:
+                                            arguments = json.loads(arguments)
+                                        except:
+                                            logger.error(f"TIMER-TEST: Could not parse arguments: {arguments}")
+                                            return
+                                    
+                                    # Process the tool call
+                                    tool_call_data = {"name": tool_name, "arguments": arguments}
+                                    result = await process_tool_call(session, tool_call_data)
+                                    logger.info(f"TIMER-TEST: Direct handler tool result: {result}")
+                                    
+                                    # Return the result
+                                    return result
+                            except Exception as e:
+                                logger.error(f"TIMER-TEST: Error in direct function call handler: {e}")
+                        
+                        # Create a synchronous wrapper for the async handler
+                        def sync_function_call_handler(func_call):
+                            # Return the result from the async function
+                            result_future = asyncio.ensure_future(direct_function_call_handler(func_call))
+                            
+                            # If the API expects a result, we need to somehow get it from the future
+                            # This is a bit tricky since we're in a synchronous context
+                            # For simple handlers that don't need to return anything, this is enough
+                            return None  # Or implement a way to get the result if needed
+                        
+                        # Register the direct handler
+                        try:
+                            handler_method(sync_function_call_handler)
+                            logger.info("TIMER-DEBUG: Successfully registered direct function call handler")
+                        except Exception as e:
+                            logger.error(f"TIMER-DEBUG: Error registering direct function call handler: {e}")
     except Exception as e:
         logger.error(f"Failed to create Google realtime model: {e}")
         # Fallback to original session with commented code
@@ -326,14 +520,141 @@ async def entrypoint(ctx: agents.JobContext):
     # Log whether we're using tools or pattern matching
     if GLOBAL_ENABLE_TOOLS and GLOBAL_PERSONA_CONFIG.allowed_tools:
         logger.info(f"Using tool calling for {GLOBAL_PERSONA_CONFIG.allowed_tools}")
+        
+        # Get tools from the session state
+        session_state = get_or_create_session_state(ctx.room.name, session)
+        
+        # Register tools with the underlying LiveKit RealtimeModel
+        if session_state and hasattr(session, 'update_tools'):
+            from livekit.agents import llm
+            
+            # Define timer tool using LiveKit's standard FunctionTool format
+            timer_tool = llm.FunctionTool(
+                name="startTimer",
+                description="Start a timer for the specified duration",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "duration": {
+                            "type": "integer",
+                            "description": "Duration in seconds"
+                        },
+                        "purpose": {
+                            "type": "string",
+                            "enum": ["preparation", "speaking"],
+                            "description": "Purpose of the timer"
+                        }
+                    },
+                    "required": ["duration"]
+                }
+            )
+            
+            # Register tools directly with the LiveKit session
+            try:
+                logger.info("TIMER-DEBUG: Registering tools using session.update_tools")
+                await session.update_tools([
+                    timer_tool,
+                    # Add other tools from GLOBAL_PERSONA_CONFIG.allowed_tools as needed
+                ])
+                logger.info("TIMER-DEBUG: Successfully registered tools with LiveKit session")
+            except Exception as e:
+                logger.error(f"TIMER-ERROR: Failed to register tools with session.update_tools: {e}")
+                
+            logger.info("TIMER-DEBUG: Tool calling enabled for timer functionality")
     else:
         logger.info("Using pattern matching for commands instead of tools")
     
     # Log persona details
     logger.info(f"Using persona '{GLOBAL_PERSONA_CONFIG.identity}' for {page_path}")
     
-    # Start the agent session in the specified room
-    # Note: Not using tools since they aren't supported in the current API
+    # Define speech event handlers
+    async def handle_speech_started(event):
+        """Handle the input_speech_started event.
+        
+        This function logs when the user starts speaking.
+        
+        Args:
+            event: The speech started event
+        """
+        logger.info("TIMER-TEST: Speech started")
+
+    async def handle_transcription_completed(event):
+        """Handle the input_audio_transcription_completed event.
+        
+        This function processes the completed transcription and triggers a response.
+        
+        Args:
+            event: The transcription completed event containing the transcript
+        """
+        try:
+            # Extract the transcript
+            transcript = getattr(event, "transcript", None)
+            if not transcript:
+                logger.warning("TIMER-TEST: No transcript found in transcription completion event")
+                return
+                
+            logger.info(f"TIMER-TEST: Transcription completed: {transcript}")
+            
+            # Get the session state
+            room_name = session.room.name if hasattr(session, "room") else "unknown_room"
+            session_state = get_or_create_session_state(room_name, session)
+            
+            # Add user turn to history (optional)
+            if hasattr(session_state, "add_history"):
+                session_state.add_history("user", transcript)
+            
+            # Trigger response generation with the user's text as input
+            logger.info("TIMER-TEST: Triggering session.generate_reply() with transcript...")
+            # Pass the transcript as the prompt/instruction for THIS TURN
+            await session.generate_reply(instructions=transcript)
+            logger.info("TIMER-TEST: session.generate_reply() triggered.")
+        except Exception as e:
+            logger.error(f"TIMER-TEST: Error handling transcription: {e}", exc_info=True)
+
+    # Register speech event handlers
+    logger.info("Registering handlers for speech events")
+    try:
+        # Register a general event handler to debug all events
+        def generic_event_logger(event):
+            event_type = type(event).__name__
+            logger.info(f"TIMER-TEST: Received event of type: {event_type}")
+            if hasattr(event, "transcript"):
+                logger.info(f"TIMER-TEST: Event has transcript: {event.transcript}")
+            elif hasattr(event, "is_final") and event.is_final:
+                logger.info(f"TIMER-TEST: Received final transcription event")
+                
+        # Register handlers for ALL possible events to debug
+        session.on("*", generic_event_logger)
+        logger.info("Successfully registered generic event logger for all events")
+            
+        # Register specific speech event handlers
+        def sync_transcription_handler(event):
+            logger.info(f"TIMER-TEST: Specific transcription handler called for event: {type(event).__name__}")
+            asyncio.create_task(handle_transcription_completed(event))
+            
+        session.on("input_audio_transcription_completed", sync_transcription_handler)
+        logger.info("Successfully registered transcription handler")
+        
+        def sync_speech_start_handler(event):
+            logger.info(f"TIMER-TEST: Specific speech start handler called for event: {type(event).__name__}")
+            asyncio.create_task(handle_speech_started(event))
+            
+        session.on("input_speech_started", sync_speech_start_handler)
+        logger.info("Successfully registered speech start handler")
+        
+        # Try alternative event names (LiveKit might be using different event names)
+        session.on("transcription_completed", sync_transcription_handler)
+        logger.info("Registered alternative 'transcription_completed' handler")
+        
+        session.on("speech_started", sync_speech_start_handler)
+        logger.info("Registered alternative 'speech_started' handler")
+        
+        session.on("input_transcription_completed", sync_transcription_handler)
+        logger.info("Registered alternative 'input_transcription_completed' handler")
+    except Exception as e:
+        logger.error(f"Error registering speech event handlers: {e}", exc_info=True)
+
+    # Start the agent session in the specified room with tools enabled
     await session.start(
         room=ctx.room,
         agent=assistant,
@@ -341,126 +662,68 @@ async def entrypoint(ctx: agents.JobContext):
             noise_cancellation=noise_cancellation.BVC(),
         ),
     )
+    logger.info("Agent started with function calling for tools")
     
-    logger.info("Agent started - using data messages for timer control")
-    
-    # Send initial message about the alternative timer approach
-    logger.info("Note: Using data messages instead of tools for timer functionality")
-    
-    # Define helper function to send timer commands via data messages
-    async def send_timer_command(action, duration=None, message=None):
-        try:
-            timer_command = {
-                "type": "timer",
-                "action": action
-            }
-            
-            if action == "start":
-                timer_command["mode"] = "preparation" if duration == 15 else "speaking"
-                timer_command["duration"] = duration
-                if message:
-                    timer_command["message"] = message
-            
-            # Send the command as a data message
-            await ctx.room.local_participant.publish_data(json.dumps(timer_command).encode())
-            logger.info(f"Sent timer command: {action} {f'for {duration}s' if duration else ''}")
-            return True
-        except Exception as e:
-            logger.error(f"Error sending timer command: {e}")
-            return False
-    
-    # Add a text message handler to detect timer commands in AI responses
+    # Import regex for later use
     import re
     
-    async def on_llm_message(message):
-        # If this is a message from the AI, check for timer commands
-        if message is not None and hasattr(message, 'text'):
-            text = message.text.lower()
-            logger.info(f"Processing AI message for timer commands: {text[:50]}...")
-            
-            # Check for preparation timer patterns
-            prep_patterns = [
-                r"start.*preparation timer",
-                r"begin.*preparation",
-                r"\d+ seconds to prepare",
-                r"prepare for \d+ seconds"
-            ]
-            
-            # Check for speaking timer patterns
-            speaking_patterns = [
-                r"start.*speaking timer", 
-                r"begin.*speaking",
-                r"speak for \d+ seconds",
-                r"\d+ seconds to speak"
-            ]
-            
-            # Check for timer stop patterns
-            stop_patterns = [
-                r"stop.*timer",
-                r"end.*timer",
-                r"time('s)? up"
-            ]
-            
-            # Check for preparation timer
-            for pattern in prep_patterns:
-                if re.search(pattern, text):
-                    logger.info("Detected preparation timer command")
-                    await send_timer_command("start", 15, "Preparation Time")
-                    return
-            
-            # Check for speaking timer
-            for pattern in speaking_patterns:
-                if re.search(pattern, text):
-                    logger.info("Detected speaking timer command")
-                    await send_timer_command("start", 45, "Speaking Time")
-                    return
-            
-            # Check for timer stop
-            for pattern in stop_patterns:
-                if re.search(pattern, text):
-                    logger.info("Detected timer stop command")
-                    await send_timer_command("stop")
-                    return
-    
-    # Make sure we have a valid handler binding
-    try:
-        # Some versions use this API
-        session.on_llm_message(on_llm_message)
-        logger.info("Registered message handler with on_llm_message")
-    except Exception as e:
-        logger.error(f"Error registering message handler: {e}")
-        try:
-            # Alternative API for some versions
-            session.llm.on_message(on_llm_message)
-            logger.info("Registered message handler with llm.on_message")
-        except Exception as e2:
-            logger.error(f"Error registering alternative message handler: {e2}")
-    
-    # Handle function (tool) calling
-    async def on_function_call(data):
-        try:
-            logger.info(f"Received function call: {data.get('name')}")
-            # Process the tool call using our dispatcher
-            result = await process_tool_call(session, data)
-            logger.info(f"Tool call result: {result}")
-            return result
-        except Exception as e:
-            logger.error(f"Error handling function call: {e}")
-            return {
-                "name": data.get("name", "unknown"),
-                "response": {
-                    "success": False,
-                    "message": f"Error: {str(e)}"
-                }
-            }
-    
-    # Register function call handler
+    # We're NOT registering any callback handlers like on_function_call or on_message
+    # Instead, we'll use the process_user_input function below to handle user input and detect function calls
+    # This is the recommended approach for Gemini API with tool calling
     if GLOBAL_ENABLE_TOOLS:
+        logger.info(f"Tool calling enabled with {len(session_state.current_tools)} tools")
+        for tool in session_state.current_tools:
+            tool_name = getattr(tool, 'name', str(tool))
+            logger.info(f"  - Available tool: {tool_name}")
+    else:
+        logger.warning("Tool calling is disabled for this session")
+    
+    # NOTE: This function is now only for handling explicit text messages (non-voice)
+    # Voice input and function calls are handled by the handle_generation_event handler
+    # registered to the "generation_created" event
+    async def process_user_input(user_input):
+        """
+        Process explicit text input (not voice) and handle any function calls.
+        
+        Note: This function is NOT in the pathway for handling voice inputs.
+        Voice inputs and their function calls are processed by handle_generation_event.
+        """
         try:
-            session.on_function_call(on_function_call)
-            logger.info("Registered function call handler")
+            # Get the session state for the current room
+            session_state = get_or_create_session_state(ctx.room.name, session)
+            
+            # Use send_message to detect function calls in the SDK-standard way
+            logger.info(f"Processing explicit text input: {user_input[:50]}...")
+            response = await send_message(session_state, user_input)
+            
+            # Check if it's a function call
+            if response and response.get('type') == 'function_call':
+                tool_name = response['tool_name']
+                tool_args = response['tool_args']
+                logger.info(f"Detected function call from explicit text: {tool_name} with args: {tool_args}")
+                
+                # Prepare the tool call data
+                tool_call_data = {
+                    "name": tool_name,
+                    "arguments": tool_args
+                }
+                
+                # Process the tool call using the central dispatcher
+                result = await process_tool_call(session, tool_call_data)
+                logger.info(f"Tool dispatcher result: {result}")
+                
+                # Send the function response back to Gemini
+                await send_function_response(session_state, tool_name, result)
+            
+            # Return the processed response
+            return response
         except Exception as e:
-            logger.error(f"Failed to register function call handler: {e}")
+            logger.error(f"Error processing explicit text input: {e}")
+            return {"type": "error", "error": str(e)}
+    
+    # Hook into key speech/text events to use our process_user_input function
+    # This is the recommended approach instead of trying to modify the RealtimeModel's internals
+    logger.info("Standard function call detection system registered")
     
     # Send an initial greeting appropriate for the current persona
     await session.generate_reply(
