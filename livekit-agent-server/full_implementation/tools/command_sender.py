@@ -79,20 +79,39 @@ async def send_timer_command(
     Returns:
         True if successful, False otherwise
     """
-    command_data = {"action": action}
-    
-    if action == "start" and duration is not None:
-        command_data["duration"] = duration
+    try:
+        logger.info(f"TIMER-TEST: send_timer_command called with action={action}, duration={duration}, purpose={purpose}")
         
-    if purpose:
-        command_data["purpose"] = purpose
+        # Format the command to match UI expectations
+        # The UI expects a direct timer format, not wrapped in command_data
+        timer_command = {
+            "type": "timer",
+            "action": action
+        }
         
-    return await send_command(
-        session, 
-        "timer_control", 
-        command_data, 
-        TOPIC_TIMER
-    )
+        # For 'start' action, include duration
+        if action == "start" and duration is not None:
+            timer_command["duration"] = duration
+            
+            # Use purpose as mode for UI styling
+            if purpose:
+                timer_command["mode"] = purpose
+        
+        # Encode the command as JSON
+        payload = json.dumps(timer_command)
+        
+        # Send the timer command directly to the agent-timer topic
+        # This matches what the UI expects
+        await session.room.local_participant.publish_data(
+            payload.encode("utf-8"),
+            topic=TOPIC_TIMER  # Use the timer-specific topic
+        )
+        
+        logger.info(f"TIMER-TEST: Timer command sent: {payload}")
+        return True
+    except Exception as e:
+        logger.error(f"TIMER-TEST: Error sending timer command: {str(e)}", exc_info=True)
+        return False
 
 
 async def send_ui_notification(

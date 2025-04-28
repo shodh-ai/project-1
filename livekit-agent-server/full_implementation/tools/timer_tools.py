@@ -7,15 +7,14 @@ These tools allow the agent to control timer UI elements in the client.
 
 import logging
 import json
-import asyncio
 from typing import Dict, Any, Optional
 
 from livekit.agents import AgentSession
 
-logger = logging.getLogger(__name__)
+# Import the timer command sender
+from .command_sender import send_timer_command
 
-# Session context for timer state tracking
-timer_sessions = {}
+logger = logging.getLogger(__name__)
 
 async def handle_start_timer(session: AgentSession, args: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -30,8 +29,17 @@ async def handle_start_timer(session: AgentSession, args: Dict[str, Any]) -> Dic
     Returns:
         Response data for the tool call
     """
+    logger.info(f"TIMER-TOOL: handle_start_timer called with args: {args}")
+    
     duration = args.get("duration", 0)
     purpose = args.get("purpose", "speaking")  # Default to speaking if not specified
+    
+    logger.info(f"TIMER-TOOL: Extracted duration={duration}, purpose={purpose}")
+    
+    # Override to 15 seconds for speaking persona (fixed constraint in the prompt)
+    if purpose == "speaking":
+        logger.info(f"TIMER-TOOL: Overriding requested duration={duration} to fixed 15 seconds for speaking practice")
+        duration = 15
     
     # Validate the duration parameter
     if not isinstance(duration, int) or duration <= 0:
@@ -56,40 +64,47 @@ async def handle_start_timer(session: AgentSession, args: Dict[str, Any]) -> Dic
         "purpose": purpose
     }
     
-    # Send the timer command through the data channel
+    # Send the timer command using the dedicated command sender
     try:
-        # Send message to all participants including the UI
-        await session.room.local_participant.publish_data(
-            json.dumps({
-                "type": "timer_control",
-                "data": timer_data
-            }).encode("utf-8"),
-            topic="agent-tools"  # Use a custom topic for tool events
+        # Call the imported function, passing the session object
+        logger.info(f"TIMER-TOOL: Sending timer command: action=start, duration={duration}, purpose={purpose}")
+        success = await send_timer_command(
+            session=session,  # Pass the session object
+            action="start",
+            duration=duration,
+            purpose=purpose    # This will be used as 'mode' in UI
         )
         
-        # Store the timer state in session context
+        if not success:
+            logger.error("TIMER-TOOL: Failed to send timer command via command_sender")
+            return {
+                "success": False,
+                "message": "Failed to send timer command to UI"
+            }
+        logger.info(f"TIMER-TOOL: Successfully published timer message")
+        
+        # Simply log the command was sent - no timer state management here
         session_id = session.room.name
-        timer_sessions[session_id] = {
-            "active": True,
-            "duration": duration,
-            "purpose": purpose,
-            "start_time": asyncio.get_event_loop().time()
-        }
+        logger.info(f"TIMER-TOOL: Timer command sent for session {session_id}: duration={duration}, purpose={purpose}")
         
         # Provide a successful response to the model
-        return {
-            "success": True,
-            "message": f"Started {purpose} timer for {duration} seconds",
-            "timerStarted": True,
+        response = {
+            "success": True, 
+            "message": f"Sent command to start {purpose} timer for {duration} seconds",
+            "timerCommandSent": True,
             "duration": duration,
             "purpose": purpose
         }
+        logger.info(f"TIMER-TOOL: Returning success response: {response}")
+        return response
     except Exception as e:
-        logger.error(f"Error sending timer control: {str(e)}")
-        return {
+        logger.error(f"TIMER-TOOL: Error sending timer control: {str(e)}", exc_info=True)
+        error_response = {
             "success": False,
-            "message": f"Failed to start timer: {str(e)}"
+            "message": f"Failed to send timer command: {str(e)}"
         }
+        logger.info(f"TIMER-TOOL: Returning error response: {error_response}")
+        return error_response
 
 
 async def check_timer_status(session: AgentSession) -> Dict[str, Any]:

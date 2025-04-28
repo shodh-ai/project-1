@@ -25,7 +25,8 @@ TOOL_HANDLERS = {
 async def dispatch_tool_call(
     session: AgentSession, 
     tool_name: str, 
-    tool_args: Dict[str, Any]
+    tool_args: Dict[str, Any],
+    session_state: Any = None
 ) -> Dict[str, Any]:
     """
     Dispatches a tool call to the appropriate handler function.
@@ -34,14 +35,17 @@ async def dispatch_tool_call(
         session: The current agent session
         tool_name: The name of the tool being called
         tool_args: The arguments for the tool call
+        session_state: Optional session state object
         
     Returns:
         The response from the tool handler
     """
-    logger.info(f"Dispatching tool call: {tool_name} with args: {tool_args}")
+    logger.info(f"TIMER-DISPATCHER: Dispatching tool call: {tool_name} with args: {tool_args}")
     
     # Look up the handler for the tool
     handler = TOOL_HANDLERS.get(tool_name)
+    
+    logger.info(f"TIMER-DISPATCHER: Found handler: {handler.__name__ if handler else 'None'} for tool {tool_name}")
     
     if not handler:
         logger.warning(f"No handler found for tool: {tool_name}")
@@ -52,11 +56,16 @@ async def dispatch_tool_call(
     
     try:
         # Call the handler with the session and arguments
+        # We're standardizing handler signatures to (session, args)
+        logger.info(f"TIMER-DISPATCHER: Executing handler for {tool_name}")
+        
+        # All handlers accept (session, args) as a standard signature
         response = await handler(session, tool_args)
-        logger.info(f"Tool {tool_name} executed successfully: {response}")
+        
+        logger.info(f"TIMER-DISPATCHER: Tool {tool_name} executed successfully: {response}")
         return response
     except Exception as e:
-        logger.error(f"Error executing tool {tool_name}: {str(e)}", exc_info=True)
+        logger.error(f"TIMER-DISPATCHER: Error executing tool {tool_name}: {str(e)}", exc_info=True)
         return {
             "success": False,
             "message": f"Error executing tool {tool_name}: {str(e)}"
@@ -107,6 +116,7 @@ async def handle_tool_response(
 
 
 async def process_tool_call(
+    session_state: Any,
     session: AgentSession,
     function_call: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -114,6 +124,7 @@ async def process_tool_call(
     Process a function (tool) call from the AI and return the response.
     
     Args:
+        session_state: The agent session state
         session: The current agent session
         function_call: The function call data from the AI
         
@@ -124,7 +135,9 @@ async def process_tool_call(
         tool_name = function_call.get("name", "")
         tool_args = json.loads(function_call.get("args", "{}"))
         
-        # Dispatch the tool call
+        # Dispatch the tool call with the session
+        # We standardized handlers to only need (session, args), so no need to pass session_state
+        logger.info(f"TIMER-DISPATCHER: Dispatching tool call with session: {session.__class__.__name__ if session else 'None'}")
         response = await dispatch_tool_call(session, tool_name, tool_args)
         
         # Handle the tool response (UI updates, etc.)
