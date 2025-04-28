@@ -13,12 +13,17 @@ from livekit.agents import AgentSession
 
 # Import all tool handlers
 from .timer_tools import handle_start_timer
+from .canvas_tools import handle_draw_concept
 
 logger = logging.getLogger(__name__)
 
 # Map tool names to their handler functions
 TOOL_HANDLERS = {
+    # Speaking tools
     "startTimer": handle_start_timer,
+    
+    # Vocab tools
+    "drawConcept": handle_draw_concept,
     # Add more tools as they are implemented
 }
 
@@ -90,7 +95,7 @@ async def handle_tool_response(
     # For now, simply log the response
     # Later, this could update UI state, send notifications, etc.
     
-    # Example: send command to UI based on tool response
+    # Send command to UI based on tool response
     if tool_name == "startTimer" and response.get("success", False):
         logger.info(f"Timer started: {response.get('duration')}s for {response.get('purpose', 'speaking')}")
         
@@ -102,6 +107,29 @@ async def handle_tool_response(
                 "data": {
                     "level": "info",
                     "message": f"Timer started: {response.get('duration')}s",
+                    "source": "agent"
+                }
+            }
+            
+            # This is optional - only if we want to send UI notifications
+            # await session.room.local_participant.publish_data(
+            #     json.dumps(notification_data).encode("utf-8"),
+            #     topic="agent-ui"
+            # )
+        except Exception as e:
+            logger.error(f"Error sending notification: {str(e)}")
+    
+    # Handle drawConcept responses
+    elif tool_name == "drawConcept" and response.get("status") == "success":
+        logger.info(f"TIMER-TEST: Drawing created for concept: '{response.get('concept')}' with instructions: '{response.get('instructions', 'None')}'")        
+        
+        # Similar notification approach can be used here
+        try:
+            notification_data = {
+                "type": "notification",
+                "data": {
+                    "level": "info",
+                    "message": f"Drawing created for: {response.get('concept')}",
                     "source": "agent"
                 }
             }

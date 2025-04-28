@@ -313,15 +313,31 @@ async def entrypoint(ctx: agents.JobContext):
             # Track if any function calls were processed
             function_calls_processed = False
             
+            # Log the current page context for debugging
+            session_state = get_or_create_session_state(session.room.name, session)
+            current_page = getattr(session_state, "page_type", "unknown_page")
+            logger.info(f"TOOL-DEBUG: Current page context is: {current_page}")
+            
             # Consume the function stream to intercept function calls from Gemini
             if hasattr(event, 'function_stream'):
                 logger.info("TIMER-TEST: Processing function_stream for potential tool calls")
                 async for func_call in event.function_stream:
                     function_calls_processed = True
-                    logger.info(f"TIMER-TEST: >>> Received function call from stream: {func_call.name}")
+                    tool_name = func_call.name
+                    logger.info(f"TIMER-TEST: >>> Received function call from stream: {tool_name}")
                     logger.info(f"TIMER-TEST: Function call arguments: {func_call.arguments}")
                     logger.info(f"TIMER-TEST: Function call ID: {func_call.call_id}")
                     logger.info(f"TIMER-TEST: Function call type: {type(func_call).__name__}")
+                    
+                    # Add specific debugging for drawConcept
+                    if tool_name == "drawConcept":
+                        logger.info(f"VOCAB-DEBUG: drawConcept tool called on {current_page} page")
+                        try:
+                            args = json.loads(func_call.arguments)
+                            logger.info(f"VOCAB-DEBUG: drawConcept concept: {args.get('concept')}")
+                            logger.info(f"VOCAB-DEBUG: drawConcept instructions: {args.get('instructions', 'None')}")
+                        except Exception as e:
+                            logger.error(f"VOCAB-DEBUG: Error parsing drawConcept args: {e}")
                     
                     try:
                         # Extract the tool information
