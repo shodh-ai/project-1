@@ -13,7 +13,7 @@ start_timer_func = FunctionDeclaration(
 
     # A clear description for the AI model to understand what this tool does.
     # This helps the AI decide when it's appropriate to use this tool.
-    description="Starts a countdown timer visible to the user, typically for preparation or speaking tasks. The timer runs on the user's interface.",
+    description="**The required mechanism to activate and display a countdown timer on the user's interface** for timed tasks like preparation or speaking.",
 
     # Defines the input parameters the AI needs to provide when calling this tool.
     # Uses OpenAPI Schema specification.
@@ -33,7 +33,7 @@ start_timer_func = FunctionDeclaration(
             }
         },
         # Specify which parameters are mandatory
-        "required": ["duration"]
+        "required": ["duration", "purpose"]
     }
 )
 
@@ -113,10 +113,15 @@ TOOL_DEFINITIONS_MAP: Dict[str, FunctionDeclaration] = {
     "getSpeechFeedback": start_timer_func,  # Temporary mapping until implemented
     "recordTaskCompletion": start_timer_func,  # Temporary mapping until implemented
     
-    # Vocab tools
+    # Vocab tools - must match exactly what's in the YAML file
     "drawConcept": draw_concept_func,
     "showWordInfo": show_word_info_func,
     "startQuiz": start_quiz_func,
+
+    # Case sensitivity fallbacks (try both camel and snake case)
+    "draw_concept": draw_concept_func,
+    "show_word_info": show_word_info_func,
+    "start_quiz": start_quiz_func,
 }
 
 # --- Examples of other tools to define later ---
