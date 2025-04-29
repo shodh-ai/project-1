@@ -2,8 +2,9 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import LiveKitSession from '@/components/LiveKitSession';
+import DailySession from '@/components/daily/DailySession';
 import SpeakingTimer from '@/components/SpeakingTimer';
+import { PipecatProvider } from '@/services/pipecat/PipecatProvider';
 
 export default function Page() {
   const router = useRouter();
@@ -48,13 +49,15 @@ export default function Page() {
         </div>
       )}
       
-      <LiveKitSession
-        roomName={roomName}
-        userName={userName}
-        questionText={questionText}
-        sessionTitle="Speaking Practice Session"
-        onLeave={handleLeave}
-      />
+      <PipecatProvider>
+        <DailySession
+          roomName={roomName}
+          userName={userName}
+          questionText={questionText}
+          sessionTitle="Speaking Practice with Gemini AI"
+          onLeave={handleLeave}
+        />
+      </PipecatProvider>
     </div>
   );
 }

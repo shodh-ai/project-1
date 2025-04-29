@@ -1,0 +1,256 @@
+/* DailySession.module.css */
+.sessionContainer {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100vh;
+  background-color: #f8fafc;
+}
+
+.sessionHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 24px;
+  background-color: #fff;
+  border-bottom: 1px solid #e2e8f0;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+.sessionTitle {
+  font-size: 20px;
+  font-weight: 600;
+  color: #334155;
+  margin: 0;
+}
+
+.leaveButton {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background-color: #ef4444;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.leaveButton:hover {
+  background-color: #dc2626;
+}
+
+.mainContent {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.videoSection {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background-color: #0f172a;
+  position: relative;
+  min-width: 0;
+}
+
+.videoContainer {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+.controls {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  padding: 16px;
+  background-color: rgba(15, 23, 42, 0.8);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.controlButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background-color: #4f46e5;
+  color: white;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.controlButton:hover {
+  background-color: #4338ca;
+}
+
+.controlButtonOff {
+  background-color: #6b7280;
+}
+
+.loadingContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: white;
+  gap: 16px;
+}
+
+.loadingSpinner {
+  animation: spin 1s linear infinite;
+  width: 36px;
+  height: 36px;
+}
+
+.errorContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: white;
+  gap: 16px;
+  padding: 24px;
+  text-align: center;
+}
+
+.retryButton {
+  padding: 8px 16px;
+  background-color: #4f46e5;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.feedbackSection {
+  width: 400px;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid #e2e8f0;
+  background-color: #fff;
+  overflow-y: auto;
+}
+
+.questionCard {
+  padding: 16px;
+  background-color: #f1f5f9;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.questionTitle {
+  font-size: 16px;
+  font-weight: 600;
+  color: #334155;
+  margin-top: 0;
+  margin-bottom: 8px;
+}
+
+.questionText {
+  font-size: 14px;
+  line-height: 1.6;
+  color: #475569;
+  margin: 0;
+}
+
+.feedbackCard {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+}
+
+.feedbackHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.feedbackTitle {
+  font-size: 16px;
+  font-weight: 600;
+  color: #334155;
+  margin: 0;
+}
+
+.feedbackButton {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background-color: #4f46e5;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.feedbackButton:hover {
+  background-color: #4338ca;
+}
+
+.feedbackButton:disabled {
+  background-color: #94a3b8;
+  cursor: not-allowed;
+}
+
+.feedbackContent {
+  flex: 1;
+  background-color: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.feedbackText {
+  white-space: pre-wrap;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #334155;
+}
+
+.placeholderText {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #94a3b8;
+  text-align: center;
+  font-size: 14px;
+}
+
+.spinnerIcon {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@media (max-width: 1024px) {
+  .mainContent {
+    flex-direction: column;
+  }
+  
+  .feedbackSection {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid #e2e8f0;
+    height: 450px;
+  }
+}

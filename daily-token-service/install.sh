@@ -1,0 +1,29 @@
+#!/bin/bash
+
+# Simple installation script for the Daily.co token service
+
+echo "Installing dependencies for the Daily.co token service..."
+npm install
+
+echo "Creating .env file..."
+if [ ! -f .env ]; then
+  echo "# Daily.co API credentials
+DAILY_API_KEY=YOUR_DAILY_API_KEY
+DAILY_DOMAIN=your-domain.daily.co
+
+# Gemini API credentials
+GEMINI_API_KEY=YOUR_GEMINI_API_KEY
+
+# Server configuration
+PORT=3003
+NODE_ENV=development
+API_KEY=dev-key
+ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3001,*" > .env
+  echo ".env file created!"
+else
+  echo ".env file already exists, skipping."
+fi
+
+echo "Installation complete!"
+echo "To start the service, run: npm start"
+echo "To start the service in development mode with auto-reload, run: npm run dev"
