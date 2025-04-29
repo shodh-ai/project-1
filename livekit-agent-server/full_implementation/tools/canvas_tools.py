@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional
 from livekit.agents import AgentSession
 
 # Import the command sender for dispatching drawing commands to the client
-from tools.command_sender import send_data_message
+from tools.command_sender import send_command, TOPIC_CANVAS
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +48,9 @@ async def handle_draw_concept(session: AgentSession, args: Dict[str, Any]) -> Di
     }
     
     try:
-        # Try to send the data message to the client
+        # Try to send the command to the client
         # In a full implementation, this would trigger canvas drawing on the client side
-        await send_data_message(session, "agent-canvas", json.dumps(canvas_data))
+        await send_command(session, "draw_concept", canvas_data, topic=TOPIC_CANVAS)
         logger.info(f"TIMER-TEST: Canvas command sent for concept: '{concept}'")
         
         # Return a successful response
