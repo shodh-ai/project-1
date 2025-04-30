@@ -36,9 +36,18 @@ from services.http_client import initialize, close
 from services import canvas_client, content_client, user_progress_client
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, 
-                   format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.DEBUG, 
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("agent_log.txt"),
+    ]
+)
 logger = logging.getLogger(__name__)
+
+# Ensure DEBUG level is explicitly set for our logger
+logger.setLevel(logging.DEBUG)
 
 # Import plugins that are actually installed
 try:
@@ -486,10 +495,19 @@ async def entrypoint(ctx: agents.JobContext):
         session.on("input_transcription_completed", sync_transcription_handler)
         logger.info("Registered alternative 'input_transcription_completed' handler")
         
-        # Register function call event handlers - use the existing router from above
-        session.on("function_call_started", lambda fc: logger.info(f"▶ tool {fc.name} {fc.args}"))
-        session.on("function_call_finished", lambda fc, out: logger.info(f"✔ tool {fc.name} → {out}"))
-        logger.info("Successfully registered function call handlers")
+        # Register function call event handlers for v1 API
+        # Old v0 events we're replacing:
+        # session.on("function_call_started", lambda fc: logger.info(f"▶ tool {fc.name} {fc.args}"))
+        # session.on("function_call_finished", lambda fc, out: logger.info(f"✔ tool {fc.name} → {out}"))
+        
+        # Register listener for v1 function_tools_executed event
+        async def watch_tools(evt):
+            logger.info("Function tools executed event received")
+            for call, result in evt.zipped():
+                logger.info(f"🛠️ Tool executed: {call.name} → {result.text}")
+        
+        session.on("function_tools_executed", watch_tools)
+        logger.info("Successfully registered function_tools_executed handler")
         
     except Exception as e:
         logger.error(f"Error registering event handlers: {e}", exc_info=True)

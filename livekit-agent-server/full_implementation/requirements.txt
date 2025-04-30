@@ -1,0 +1,10 @@
+# LiveKit Agents requirements
+# Lock versions to prevent accidental downgrade to v0 API
+livekit-agents==1.0.*
+livekit-plugins-google==1.0.*
+
+# Other dependencies
+fastapi>=0.95.0
+uvicorn>=0.21.1
+python-dotenv>=1.0.0
+pyyaml>=6.0

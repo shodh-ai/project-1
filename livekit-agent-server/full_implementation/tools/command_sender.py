@@ -102,9 +102,11 @@ async def send_timer_command(
         
         # Send the timer command directly to the agent-timer topic
         # This matches what the UI expects
+        # Use reliable delivery to ensure the message arrives
         await session.room.local_participant.publish_data(
             payload.encode("utf-8"),
-            topic=TOPIC_TIMER  # Use the timer-specific topic
+            topic=TOPIC_TIMER,  # Use the timer-specific topic
+            reliability="reliable"  # Ensure reliable delivery
         )
         
         logger.info(f"TIMER-TEST: Timer command sent: {payload}")
