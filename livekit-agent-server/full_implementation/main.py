@@ -514,6 +514,17 @@ async def entrypoint(ctx: agents.JobContext):
         
     except Exception as e:
         logger.error(f"Error registering event handlers: {e}", exc_info=True)
+    
+    # Add the current_session approach for function_tools_executed before session.start
+    # This follows the exact pattern recommended in the patch and ensures proper timing
+    @current_session().on("function_tools_executed")
+    async def _log_tools(evt):
+        """
+        Fires once per user turn after **all** tools have finished.
+        """
+        for call, result in evt.zipped():
+            logger.info(f"🛠️ current_session: {call.name} → {result.text}")
+    logger.info("Registered function_tools_executed handler using current_session()")
 
     # Start the agent session in the specified room with tools enabled
     await session.start(
@@ -524,16 +535,6 @@ async def entrypoint(ctx: agents.JobContext):
         ),
     )
     logger.info("Agent started with function calling for tools")
-    
-    # Add the current_session approach for function_tools_executed as well
-    # This follows the exact pattern recommended in the patch
-    @current_session().on("function_tools_executed")
-    async def _log_tools(evt):
-        """
-        Fires once per user turn after **all** tools have finished.
-        """
-        for call, result in evt.zipped():
-            logger.info(f"🛠️ current_session: {call.name} → {result.text}")
     
     # Import regex for later use
     import re
