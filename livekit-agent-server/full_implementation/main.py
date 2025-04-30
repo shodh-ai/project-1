@@ -7,7 +7,10 @@ import argparse
 from typing import Dict, List, Any, Optional
 from dotenv import load_dotenv
 from livekit import agents
-from livekit.agents import AgentSession, Agent, RoomInputOptions
+from livekit.agents import AgentSession, Agent, RoomInputOptions, current_session
+
+# Set LIVEKIT_LOGLEVEL to debug to see internal SDK logs (▶ tool ... ✔ tool ...)
+os.environ["LIVEKIT_LOGLEVEL"] = "debug"
 
 # Import the YAML-based configuration loader
 from agent_config_loader import (
@@ -521,6 +524,16 @@ async def entrypoint(ctx: agents.JobContext):
         ),
     )
     logger.info("Agent started with function calling for tools")
+    
+    # Add the current_session approach for function_tools_executed as well
+    # This follows the exact pattern recommended in the patch
+    @current_session().on("function_tools_executed")
+    async def _log_tools(evt):
+        """
+        Fires once per user turn after **all** tools have finished.
+        """
+        for call, result in evt.zipped():
+            logger.info(f"🛠️ current_session: {call.name} → {result.text}")
     
     # Import regex for later use
     import re
