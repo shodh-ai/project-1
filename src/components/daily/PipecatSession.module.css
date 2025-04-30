@@ -1,0 +1,244 @@
+/* PipecatSession.module.css */
+.container {
+  display: flex;
+  flex-direction: column;
+  width: 800px;
+  min-height: 328px;
+  margin-left: 152px;
+  background-color: #f8fafc;
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 24px;
+  background-color: #fff;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.title {
+  font-size: 20px;
+  font-weight: 600;
+  color: #334155;
+  margin: 0;
+}
+
+.closeButton {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  transition: all 0.2s;
+  font-size: 18px;
+}
+
+.closeButton:hover {
+  background-color: #f1f5f9;
+  color: #334155;
+}
+
+.content {
+  padding: 20px;
+}
+
+.error {
+  margin-bottom: 16px;
+  padding: 12px;
+  background-color: #fee2e2;
+  color: #b91c1c;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.joinSection {
+  padding: 24px;
+  text-align: center;
+}
+
+.joinButton {
+  background-color: #2563eb;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 10px 20px;
+  font-size: 16px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.joinButton:hover {
+  background-color: #1d4ed8;
+}
+
+.joinButton:disabled {
+  background-color: #94a3b8;
+  cursor: not-allowed;
+}
+
+.sessionContent {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.mainContent {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.questionCard,
+.conversationCard {
+  background-color: white;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+}
+
+.questionTitle,
+.conversationTitle {
+  font-size: 16px;
+  font-weight: 600;
+  color: #334155;
+  margin: 0;
+}
+
+.questionCard {
+  padding: 16px;
+}
+
+.questionText {
+  margin-top: 8px;
+  margin-bottom: 0;
+  color: #475569;
+  line-height: 1.5;
+}
+
+.conversationHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background-color: #f1f5f9;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.status {
+  font-size: 14px;
+  color: #0f766e;
+  background-color: #ccfbf1;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.status.listening {
+  color: #0369a1;
+  background-color: #e0f2fe;
+}
+
+.status.processing {
+  color: #9333ea;
+  background-color: #f3e8ff;
+}
+
+.status.speaking {
+  color: #b45309;
+  background-color: #fef3c7;
+}
+
+.conversationContent {
+  padding: 16px;
+  min-height: 150px;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.transcriptText {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #334155;
+}
+
+.placeholder {
+  color: #94a3b8;
+  font-style: italic;
+  margin: 0;
+}
+
+.controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 0;
+  border-top: 1px solid #e2e8f0;
+  margin-top: 16px;
+}
+
+.micButton {
+  background-color: #2563eb;
+  color: white;
+  border: none;
+  border-radius: 50%;
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  font-size: 20px;
+}
+
+.micButton:hover {
+  background-color: #1d4ed8;
+}
+
+.micActive {
+  background-color: #dc2626;
+  animation: pulse 2s infinite;
+}
+
+.micActive:hover {
+  background-color: #b91c1c;
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.4);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(220, 38, 38, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(220, 38, 38, 0);
+  }
+}
+
+.leaveButton {
+  background-color: #ef4444;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.leaveButton:hover {
+  background-color: #dc2626;
+}

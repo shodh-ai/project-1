@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .card { border: 1px solid #ccc; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+        button { padding: 8px 16px; margin-right: 8px; margin-bottom: 8px; }
+        #status { font-weight: bold; margin: 16px 0; }
+        #messages { max-height: 300px; overflow-y: auto; border: 1px solid #eee; padding: 8px; }
+        .success { color: green; }
+        .error { color: red; }
+        .info { color: blue; }
+        .log { margin: 4px 0; border-bottom: 1px solid #eee; padding-bottom: 4px; }
+        pre { white-space: pre-wrap; background: #f5f5f5; padding: 8px; overflow: auto; }
+    </style>
+</head>
+<body>
+    <h1>Enhanced WebSocket Connection Test</h1>
+    
+    <div class="card">
+        <h3>Agent Management</h3>
+        <button id="create-agent">Create Test Agent</button>
+        <button id="delete-agent" disabled>Delete Agent</button>
+        <div id="agent-status">No agent created</div>
+    </div>
+    
+    <div class="card">
+        <h3>WebSocket Connection</h3>
+        <button id="connect" disabled>Connect WebSocket</button>
+        <button id="disconnect" disabled>Disconnect</button>
+        <div id="status">Disconnected</div>
+    </div>
+    
+    <div class="card">
+        <h3>Send Messages</h3>
+        <button id="send-text" disabled>Send Text Message</button>
+        <button id="send-ping" disabled>Send Ping</button>
+    </div>
+    
+    <div class="card">
+        <h3>Server Status</h3>
+        <button id="check-health">Check Server Health</button>
+        <div id="server-status">Unknown</div>
+    </div>
+    
+    <div class="card">
+        <h3>Debug Log</h3>
+        <button id="clear-log">Clear Log</button>
+        <div id="messages"></div>
+    </div>
+
+    <script>
+        let ws = null;
+        let currentAgentId = null;
+        
+        // Helper for logging
+        function log(message, type = 'info') {
+            const messages = document.getElementById('messages');
+            const logEntry = document.createElement('div');
+            logEntry.className = `log ${type}`;
+            logEntry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            messages.prepend(logEntry);
+            console.log(`[${type}]`, message);
+        }
+        
+        // Check server health
+        document.getElementById('check-health').addEventListener('click', () => {
+            log('Checking server health...', 'info');
+            fetch('http://localhost:3004/health')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('server-status').textContent = 
+                        `Server OK: ${data.activeAgents} active agents | ${data.timestamp}`;
+                    log(`Server health: ${JSON.stringify(data)}`, 'success');
+                })
+                .catch(err => {
+                    document.getElementById('server-status').textContent = 'Server unreachable';
+                    log(`Server health check failed: ${err.message}`, 'error');
+                });
+        });
+        
+        // Create a test agent
+        document.getElementById('create-agent').addEventListener('click', () => {
+            log('Creating test agent...', 'info');
+            
+            fetch('http://localhost:3004/api/create-agent', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    roomUrl: 'https://shodhai.daily.co/test-room',
+                    userName: 'Test AI',
+                    role: 'tester',
+                }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                log(`Agent created: ${JSON.stringify(data)}`, 'success');
+                
+                if (data.success && data.agentId) {
+                    currentAgentId = data.agentId;
+                    document.getElementById('agent-status').innerHTML = 
+                        `<pre>ID: ${data.agentId}\nRoom: ${data.roomUrl}</pre>`;
+                    document.getElementById('connect').disabled = false;
+                    document.getElementById('delete-agent').disabled = false;
+                }
+            })
+            .catch(err => {
+                log(`Error creating agent: ${err.message}`, 'error');
+                document.getElementById('agent-status').textContent = `Error: ${err.message}`;
+            });
+        });
+        
+        // Delete the agent
+        document.getElementById('delete-agent').addEventListener('click', () => {
+            if (!currentAgentId) {
+                log('No agent to delete', 'error');
+                return;
+            }
+            
+            log(`Deleting agent ${currentAgentId}...`, 'info');
+            
+            fetch(`http://localhost:3004/api/agents/${currentAgentId}`, {
+                method: 'DELETE'
+            })
+            .then(response => response.json())
+            .then(data => {
+                log(`Agent deleted: ${JSON.stringify(data)}`, 'success');
+                document.getElementById('agent-status').textContent = 'Agent deleted';
+                document.getElementById('delete-agent').disabled = true;
+                document.getElementById('connect').disabled = true;
+                currentAgentId = null;
+            })
+            .catch(err => {
+                log(`Error deleting agent: ${err.message}`, 'error');
+            });
+        });
+        
+        // Connect WebSocket
+        document.getElementById('connect').addEventListener('click', () => {
+            if (!currentAgentId) {
+                log('No agent ID available', 'error');
+                return;
+            }
+            
+            log(`Connecting WebSocket to agent ${currentAgentId}...`, 'info');
+            connectWS(currentAgentId);
+        });
+        
+        // Disconnect WebSocket
+        document.getElementById('disconnect').addEventListener('click', () => {
+            if (ws) {
+                log('Closing WebSocket connection...', 'info');
+                ws.close();
+                ws = null;
+                document.getElementById('status').textContent = 'Disconnected (user initiated)';
+                document.getElementById('disconnect').disabled = true;
+                document.getElementById('send-text').disabled = true;
+                document.getElementById('send-ping').disabled = true;
+                document.getElementById('connect').disabled = false;
+            }
+        });
+        
+        // Send text message
+        document.getElementById('send-text').addEventListener('click', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const message = {
+                    type: 'text',
+                    text: 'Hello from test client!'
+                };
+                ws.send(JSON.stringify(message));
+                log(`Sent: ${JSON.stringify(message)}`, 'info');
+            } else {
+                log('WebSocket not connected', 'error');
+            }
+        });
+        
+        // Send ping
+        document.getElementById('send-ping').addEventListener('click', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const message = {
+                    type: 'ping',
+                    timestamp: Date.now()
+                };
+                ws.send(JSON.stringify(message));
+                log(`Sent ping: ${JSON.stringify(message)}`, 'info');
+            } else {
+                log('WebSocket not connected', 'error');
+            }
+        });
+        
+        // Clear log
+        document.getElementById('clear-log').addEventListener('click', () => {
+            document.getElementById('messages').innerHTML = '';
+        });
+        
+        // WebSocket connection function
+        function connectWS(agentId) {
+            try {
+                // Close existing connection if any
+                if (ws) {
+                    ws.close();
+                }
+                
+                // Log browser WebSocket support
+                log(`Browser WebSocket support: ${typeof WebSocket !== 'undefined'}`, 'info');
+                if (typeof WebSocket === 'undefined') {
+                    log('WebSocket not supported by this browser!', 'error');
+                    return;
+                }
+                
+                // Create WebSocket with timeout to catch connection issues
+                const socketUrl = `ws://localhost:3004/agent/${agentId}`;
+                log(`Connecting to: ${socketUrl}`, 'info');
+                
+                ws = new WebSocket(socketUrl);
+                
+                // Set connection timeout
+                const connectionTimeout = setTimeout(() => {
+                    if (ws && ws.readyState !== WebSocket.OPEN) {
+                        log('WebSocket connection timed out after 5 seconds', 'error');
+                        ws.close();
+                    }
+                }, 5000);
+                
+                ws.onopen = () => {
+                    clearTimeout(connectionTimeout);
+                    log('WebSocket connected successfully', 'success');
+                    document.getElementById('status').textContent = 'Connected';
+                    document.getElementById('status').className = 'success';
+                    document.getElementById('disconnect').disabled = false;
+                    document.getElementById('send-text').disabled = false;
+                    document.getElementById('send-ping').disabled = false;
+                    document.getElementById('connect').disabled = true;
+                };
+                
+                ws.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        log(`Received: ${JSON.stringify(data)}`, 'info');
+                    } catch (err) {
+                        log(`Received non-JSON: ${event.data}`, 'info');
+                    }
+                };
+                
+                ws.onerror = (error) => {
+                    clearTimeout(connectionTimeout);
+                    log(`WebSocket error: ${error.type}`, 'error');
+                    document.getElementById('status').textContent = 'Error';
+                    document.getElementById('status').className = 'error';
+                    document.getElementById('connect').disabled = false;
+                    document.getElementById('disconnect').disabled = true;
+                    document.getElementById('send-text').disabled = true;
+                    document.getElementById('send-ping').disabled = true;
+                };
+                
+                ws.onclose = (event) => {
+                    clearTimeout(connectionTimeout);
+                    log(`WebSocket closed: Code ${event.code}, Reason: ${event.reason || 'No reason provided'}`, 
+                        event.wasClean ? 'info' : 'error');
+                    document.getElementById('status').textContent = 
+                        `Closed: Code ${event.code}${event.reason ? ` (${event.reason})` : ''}`;
+                    document.getElementById('status').className = event.wasClean ? 'info' : 'error';
+                    document.getElementById('connect').disabled = false;
+                    document.getElementById('disconnect').disabled = true;
+                    document.getElementById('send-text').disabled = true;
+                    document.getElementById('send-ping').disabled = true;
+                };
+            } catch (err) {
+                log(`Error creating WebSocket: ${err.message}`, 'error');
+                document.getElementById('status').textContent = `Connection error: ${err.message}`;
+                document.getElementById('status').className = 'error';
+            }
+        }
+        
+        // Check server health on page load
+        document.getElementById('check-health').click();
+    </script>
+</body>
+</html>

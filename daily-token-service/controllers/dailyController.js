@@ -9,8 +9,12 @@ const jwt = require('jsonwebtoken');
  */
 exports.createRoom = async (req, res, next) => {
   try {
+    // Log incoming request for debugging
+    console.log(`Create Room Request - Method: ${req.method}, Query:`, req.query, 'Headers:', Object.keys(req.headers));
+    
     const { name } = req.query;
     const roomName = name || `room-${Date.now()}`;
+    const dailyDomain = process.env.DAILY_DOMAIN || 'shodhai.daily.co';
     
     // Daily.co API endpoint for creating rooms
     const url = 'https://api.daily.co/v1/rooms';
@@ -18,10 +22,30 @@ exports.createRoom = async (req, res, next) => {
     // Ensure we have the API key
     const apiKey = process.env.DAILY_API_KEY;
     if (!apiKey) {
+      console.error('Daily API Key not configured');
       return res.status(500).json({ error: 'Daily API Key not configured' });
     }
     
+    // For debugging API key issues
+    console.log(`Using Daily API Key: ${apiKey.substring(0, 4)}***`);
+    
+    // Use predefined room for development or create a new one
+    const dailySampleRoomUrl = process.env.DAILY_SAMPLE_ROOM_URL;
+    if (process.env.NODE_ENV !== 'production' && dailySampleRoomUrl) {
+      console.log(`Using sample room URL: ${dailySampleRoomUrl}`);
+      // Extract room name from sample URL
+      const sampleRoomName = dailySampleRoomUrl.split('/').pop();
+      return res.status(200).json({
+        room: {
+          name: sampleRoomName,
+          url: dailySampleRoomUrl
+        },
+        url: dailySampleRoomUrl
+      });
+    }
+    
     // Make request to Daily.co API
+    console.log(`Creating Daily.co room: ${roomName}`);
     const response = await axios.post(url, {
       name: roomName,
       properties: {
@@ -38,6 +62,8 @@ exports.createRoom = async (req, res, next) => {
       }
     });
     
+    console.log('Daily.co room created successfully');
+    
     // Return the room details
     return res.status(200).json({
       room: response.data,
@@ -50,13 +76,14 @@ exports.createRoom = async (req, res, next) => {
       // If room already exists, the error is 409 Conflict
       if (error.response.status === 409) {
         const roomName = req.query.name || `room-${Date.now()}`;
+        const dailyDomain = process.env.DAILY_DOMAIN || 'shodhai.daily.co';
         
         return res.status(200).json({
           room: {
             name: roomName,
-            url: `https://your-domain.daily.co/${roomName}`
+            url: `https://${dailyDomain}/${roomName}`
           },
-          url: `https://your-domain.daily.co/${roomName}`,
+          url: `https://${dailyDomain}/${roomName}`,
           note: 'Room already exists'
         });
       }
@@ -113,10 +140,13 @@ exports.generateToken = async (req, res, next) => {
     // Log token generation (but not the actual token)
     console.log(`Daily.co token generated for user: ${username}, room: ${room}`);
     
+    // Get the Daily domain from environment or use default
+    const dailyDomain = process.env.DAILY_DOMAIN || 'shodhai.daily.co';
+    
     // Return token and room URL
     return res.status(200).json({
       token: response.data.token,
-      roomUrl: `https://your-domain.daily.co/${room}`
+      roomUrl: `https://${dailyDomain}/${room}`
     });
     
   } catch (error) {

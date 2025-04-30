@@ -1,0 +1,39 @@
+{
+  "pages": {
+    "/layout": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/css/app/layout.css",
+      "static/chunks/app/layout.js"
+    ],
+    "/speaking-practice/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/css/app/speaking-practice/page.css",
+      "static/chunks/app/speaking-practice/page.js"
+    ],
+    "/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/chunks/app/page.js"
+    ],
+    "/room/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/css/app/room/page.css",
+      "static/chunks/app/room/page.js"
+    ],
+    "/pipecat-speaking/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/css/app/pipecat-speaking/page.css",
+      "static/chunks/app/pipecat-speaking/page.js"
+    ],
+    "/gemini-live/page": [
+      "static/chunks/webpack.js",
+      "static/chunks/main-app.js",
+      "static/css/app/gemini-live/page.css",
+      "static/chunks/app/gemini-live/page.js"
+    ]
+  }
+}

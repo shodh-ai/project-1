@@ -1,0 +1,242 @@
+/* PipecatSpeaking page styles with fallback UI support */
+.container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 40px 20px;
+}
+
+.title {
+  font-size: 28px;
+  font-weight: 600;
+  color: #334155;
+  margin-bottom: 32px;
+  text-align: center;
+}
+
+.description {
+  text-align: center;
+  max-width: 800px;
+  margin: 0 auto 32px;
+  color: #475569;
+  line-height: 1.6;
+}
+
+.error {
+  background-color: #fee2e2;
+  color: #b91c1c;
+  padding: 12px 16px;
+  border-radius: 8px;
+  margin-bottom: 24px;
+  width: 800px;
+  text-align: center;
+}
+
+.topicList {
+  width: 800px;
+  margin: 0 auto;
+  margin-left: 152px;
+}
+
+.topics {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.topicCard {
+  background-color: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  padding: 24px;
+  transition: all 0.2s ease;
+}
+
+.topicCard:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  transform: translateY(-2px);
+}
+
+.topicTitle {
+  font-size: 20px;
+  font-weight: 600;
+  color: #1e40af;
+  margin: 0 0 12px 0;
+}
+
+.topicQuestion {
+  color: #334155;
+  font-size: 16px;
+  line-height: 1.6;
+  margin: 0 0 20px 0;
+}
+
+.startButton {
+  background-color: #2563eb;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 10px 16px;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.startButton:hover {
+  background-color: #1d4ed8;
+}
+
+.startButton:disabled {
+  background-color: #94a3b8;
+  cursor: not-allowed;
+}
+
+.sessionContainer {
+  width: 800px;
+  margin-left: 152px;
+  background-color: #f8fafc;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  min-height: 328px;
+}
+
+.sessionHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  background-color: #ffffff;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.sessionTitle {
+  font-size: 18px;
+  font-weight: 600;
+  color: #334155;
+  margin: 0;
+}
+
+.sessionStatus {
+  font-size: 14px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  background-color: #dbeafe;
+  color: #1e40af;
+}
+
+.questionCard {
+  background-color: #ffffff;
+  margin: 16px;
+  padding: 16px;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.questionText {
+  color: #475569;
+  font-size: 15px;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.callContainer {
+  width: 100%;
+  height: 400px;
+  background-color: #f8fafc;
+  overflow: hidden;
+  border-radius: 8px;
+}
+
+.instructions {
+  background-color: #f0f9ff;
+  margin: 16px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  border-left: 4px solid #0ea5e9;
+}
+
+.instructions p {
+  color: #0c4a6e;
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 8px 0;
+}
+
+/* Fallback UI styles */
+.fallbackContainer {
+  width: 100%;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 400px;
+}
+
+.transcriptContainer {
+  background-color: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 16px;
+  min-height: 80px;
+}
+
+.transcript {
+  color: #334155;
+  font-size: 16px;
+  line-height: 1.6;
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.transcriptPlaceholder {
+  color: #94a3b8;
+  font-style: italic;
+  margin: 0;
+}
+
+.responsesContainer {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 200px;
+  overflow-y: auto;
+  padding-right: 8px;
+}
+
+.responseItem {
+  background-color: #eff6ff;
+  border-radius: 8px;
+  padding: 12px 16px;
+  border-left: 4px solid #3b82f6;
+  animation: fadeIn 0.3s ease-in;
+}
+
+.responseText {
+  color: #1e40af;
+  font-size: 15px;
+  line-height: 1.5;
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.fallbackInstructions {
+  background-color: #fef9c3;
+  border-radius: 8px;
+  padding: 12px 16px;
+  border-left: 4px solid #ca8a04;
+  margin-top: 16px;
+}
+
+.fallbackInstructions p {
+  color: #854d0e;
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}

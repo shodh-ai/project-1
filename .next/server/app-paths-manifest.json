@@ -1,0 +1,7 @@
+{
+  "/gemini-live/page": "app/gemini-live/page.js",
+  "/api/auth/[...nextauth]/route": "app/api/auth/[...nextauth]/route.js",
+  "/speaking-practice/page": "app/speaking-practice/page.js",
+  "/pipecat-speaking/page": "app/pipecat-speaking/page.js",
+  "/page": "app/page.js"
+}

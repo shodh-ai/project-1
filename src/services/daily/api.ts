@@ -18,15 +18,36 @@ export async function createDailyRoom(name?: string): Promise<{ url: string; roo
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': process.env.NEXT_PUBLIC_API_KEY || 'dev-key',
+        'Authorization': `Bearer ${process.env.DAILY_API_KEY || process.env.PIPECAT_API_KEY || 'b352b6173857ead633c09f16e8ba35d9ff9bd6a7bff7bd8d84f609331e671541'}`,
       },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.error || 'Failed to create Daily.co room');
+    
+    // Log debug info in development
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`Daily API request to: ${DAILY_TOKEN_SERVICE_URL}/api/room${queryParams}`);
+      console.log(`API Key used: ${(process.env.NEXT_PUBLIC_API_KEY || 'dev-key').substring(0, 4)}***`);
     }
 
-    return await response.json();
+    if (!response.ok) {
+      // Try to parse error data
+      try {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `Failed to create Daily.co room: ${response.status}`);
+      } catch (jsonError) {
+        // If JSON parsing fails, throw with status code
+        throw new Error(`Failed to create Daily.co room: ${response.status}`);
+      }
+    }
+    
+    // Parse response data once
+    const data = await response.json();
+    
+    // Log success response in development
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('Daily.co room created successfully:', data);
+    }
+
+    return data;
   } catch (error) {
     console.error('Error creating Daily.co room:', error);
     throw error;
@@ -51,9 +72,15 @@ export async function generateDailyToken(
         headers: {
           'Content-Type': 'application/json',
           'x-api-key': process.env.NEXT_PUBLIC_API_KEY || 'dev-key',
+          'Authorization': `Bearer ${process.env.DAILY_API_KEY || process.env.PIPECAT_API_KEY || 'b352b6173857ead633c09f16e8ba35d9ff9bd6a7bff7bd8d84f609331e671541'}`,
         },
       }
     );
+    
+    // Log debug info in development
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`Daily API token request for room: ${room}, user: ${username}`);
+    }
 
     if (!response.ok) {
       const errorData = await response.json();

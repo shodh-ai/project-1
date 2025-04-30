@@ -20,8 +20,6 @@ if (!process.env.LIVEKIT_URL || !process.env.LIVEKIT_API_KEY || !process.env.LIV
   console.log('Setting LiveKit credentials from hardcoded values');
   process.env.LIVEKIT_URL = 'wss://shodhai-pojmjchi.livekit.cloud';
   process.env.LIVEKIT_API_KEY = 'APIFPSPx95xubAM';
-  process.env.LIVEKIT_API_SECRET = 'VIbj58g0cqmHvPLadQfAinHCBC72FPdtwtDST0UDLdc';
-}
 
 const app = express();
 // Force port 3002 for consistency with the frontend

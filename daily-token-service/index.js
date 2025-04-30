@@ -19,10 +19,31 @@ if (fs.existsSync(path.join(__dirname, '.env.pipecat'))) {
   dotenv.config({ path: path.join(__dirname, '.env.pipecat') });
 }
 
-// Hardcoded credentials as a last resort for this specific development case
+// Use credentials from environment or parent project's .env.local
 if (!process.env.DAILY_API_KEY) {
-  console.log('Setting Daily.co credentials from hardcoded values');
-  process.env.DAILY_API_KEY = 'YOUR_DAILY_API_KEY'; // Replace with actual default
+  // Try to load from parent project's .env.local if it exists
+  if (fs.existsSync(path.join(__dirname, '..', '.env.local'))) {
+    console.log('Loading Daily.co credentials from parent project .env.local');
+    require('dotenv').config({ path: path.join(__dirname, '..', '.env.local') });
+  }
+  
+  // If we still don't have the API key, use a fallback from .env.daily
+  if (!process.env.DAILY_API_KEY && process.env.DAILY_API_KEY_FALLBACK) {
+    console.log('Using fallback Daily.co credentials');
+    process.env.DAILY_API_KEY = process.env.DAILY_API_KEY_FALLBACK;
+  }
+  
+  // If we still don't have the API key, use the one from the parent project
+  if (!process.env.DAILY_API_KEY && process.env.PIPECAT_API_KEY) {
+    console.log('Using PIPECAT_API_KEY as Daily.co API key');
+    process.env.DAILY_API_KEY = process.env.PIPECAT_API_KEY;
+  }
+  
+  // Final fallback - use the value from .env.local
+  if (!process.env.DAILY_API_KEY) {
+    console.log('Setting Daily.co credentials from .env.local');
+    process.env.DAILY_API_KEY = 'b352b6173857ead633c09f16e8ba35d9ff9bd6a7bff7bd8d84f609331e671541';
+  }
 }
 
 const app = express();
