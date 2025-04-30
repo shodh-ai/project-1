@@ -9,32 +9,28 @@ import logging
 import json
 from typing import Dict, Any, Optional
 
-from livekit.agents import AgentSession
+from livekit.agents import AgentSession, function_tool, RunContext
 
 # Import the timer command sender
 from .command_sender import send_timer_command
 
 logger = logging.getLogger(__name__)
 
-async def handle_start_timer(session: AgentSession, args: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Handle startTimer tool calls by sending a timer control message through the LiveKit data channel.
+@function_tool()
+async def start_timer(context: RunContext, duration: int, purpose: str = "speaking") -> str:
+    """Start a countdown timer on the UI.
     
     Args:
-        session: The current agent session
-        args: Arguments from the tool call
-            - duration: Integer duration in seconds
-            - purpose: Optional string purpose ("preparation" or "speaking")
+        context: The run context from LiveKit Agents
+        duration: Integer duration in seconds
+        purpose: Timer purpose ("preparation" or "speaking")
             
     Returns:
-        Response data for the tool call
+        Status message
     """
-    logger.info(f"TIMER-TOOL: handle_start_timer called with args: {args}")
+    logger.info(f"TIMER-TOOL: start_timer called with duration={duration}, purpose={purpose}")
     
-    duration = args.get("duration", 0)
-    purpose = args.get("purpose", "speaking")  # Default to speaking if not specified
-    
-    logger.info(f"TIMER-TOOL: Extracted duration={duration}, purpose={purpose}")
+    session = context.session
     
     # Override to 15 seconds for speaking persona (fixed constraint in the prompt)
     if purpose == "speaking":
@@ -43,26 +39,15 @@ async def handle_start_timer(session: AgentSession, args: Dict[str, Any]) -> Dic
     
     # Validate the duration parameter
     if not isinstance(duration, int) or duration <= 0:
-        return {
-            "success": False,
-            "message": "Invalid duration provided. Must be a positive integer."
-        }
+        logger.error(f"TIMER-TOOL: Invalid duration provided: {duration}")
+        return "Invalid duration provided. Must be a positive integer."
         
     # Validate the purpose parameter if provided
     if purpose and purpose not in ["preparation", "speaking"]:
-        return {
-            "success": False,
-            "message": "Invalid purpose provided. Must be 'preparation' or 'speaking'."
-        }
+        logger.error(f"TIMER-TOOL: Invalid purpose provided: {purpose}")
+        return "Invalid purpose provided. Must be 'preparation' or 'speaking'."
     
     logger.info(f"Starting {purpose} timer for {duration} seconds")
-    
-    # Create the timer command data
-    timer_data = {
-        "action": "start",
-        "duration": duration,
-        "purpose": purpose
-    }
     
     # Send the timer command using the dedicated command sender
     try:
@@ -77,34 +62,23 @@ async def handle_start_timer(session: AgentSession, args: Dict[str, Any]) -> Dic
         
         if not success:
             logger.error("TIMER-TOOL: Failed to send timer command via command_sender")
-            return {
-                "success": False,
-                "message": "Failed to send timer command to UI"
-            }
+            return "Failed to send timer command to UI"
+            
         logger.info(f"TIMER-TOOL: Successfully published timer message")
         
         # Simply log the command was sent - no timer state management here
         session_id = session.room.name
         logger.info(f"TIMER-TOOL: Timer command sent for session {session_id}: duration={duration}, purpose={purpose}")
         
-        # Provide a successful response to the model
-        response = {
-            "success": True, 
-            "message": f"Sent command to start {purpose} timer for {duration} seconds",
-            "timerCommandSent": True,
-            "duration": duration,
-            "purpose": purpose
-        }
-        logger.info(f"TIMER-TOOL: Returning success response: {response}")
-        return response
+        # Acknowledge to the user that the timer has started
+        await context.session.say(f"I've started a {purpose} timer for {duration} seconds.")
+        
+        # Return a simple string response as per the LiveKit Agents function_tool pattern
+        return f"Started {purpose} timer for {duration} seconds"
+        
     except Exception as e:
         logger.error(f"TIMER-TOOL: Error sending timer control: {str(e)}", exc_info=True)
-        error_response = {
-            "success": False,
-            "message": f"Failed to send timer command: {str(e)}"
-        }
-        logger.info(f"TIMER-TOOL: Returning error response: {error_response}")
-        return error_response
+        return f"Failed to send timer command: {str(e)}"
 
 
 async def check_timer_status(session: AgentSession) -> Dict[str, Any]:

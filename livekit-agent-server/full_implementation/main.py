@@ -28,8 +28,8 @@ from ai.gemini_client import (
     send_function_response
 )
 
-# Import the tool dispatcher
-from tools.tool_dispatcher import process_tool_call
+# Tools are now imported directly where needed
+# (The tool_dispatcher has been removed in favor of the @function_tool decorator pattern)
 
 # Import services modules
 from services.http_client import initialize, close
@@ -207,16 +207,13 @@ async def entrypoint(ctx: agents.JobContext):
     def on_data_received_sync(payload, participant=None, kind=None):
         try:
             # Log the type of payload received
-            logger.info(f"TIMER-DEBUG: Received payload kind={kind}")
+            logger.debug(f"Received payload kind={kind}")
             
             if kind == "data":
-                # Only process actual data messages (not media chunks)
-                logger.info(f"TIMER-DEBUG: Processing data payload")
-                
+                logger.debug(f"Processing data payload")
                 try:
-                    # Try to decode as plain text
-                    text = payload.decode('utf-8')
-                    logger.info(f"TIMER-DEBUG: Decoded text of length {len(text)} bytes")
+                    data_bytes = payload.get("data", [])
+                    text = data_bytes.decode("utf-8")
                     
                     # Try to parse as JSON
                     try:
@@ -262,22 +259,54 @@ async def entrypoint(ctx: agents.JobContext):
     if not api_key:
         logger.error("GOOGLE_API_KEY is not set in the environment")
     
-    # Create the session with the Google realtime model
+    # Initialize session as None to ensure it's defined in all code paths
+    session = None
+    
+    # Create a realtime model if enabled
     try:
-        logger.info("Using LiveKit URL: %s", os.environ.get("LIVEKIT_URL"))
-        
+        # Get Google API key from environment variable
+        api_key = os.environ.get("GOOGLE_API_KEY")
         if not api_key:
             logger.error("Creating session without API key (expected to fail)")
             return
         
         # Create the model with our configuration
-        model = google.beta.realtime.RealtimeModel(
-            model="gemini-2.0-flash-live-001",  # Using production-ready model with function calling support
-            voice=GLOBAL_PERSONA_CONFIG.voice,
-            temperature=GLOBAL_PERSONA_CONFIG.temperature,
-            instructions=GLOBAL_PERSONA_CONFIG.instructions,
-            api_key=api_key,
-        )
+        from tools.timer_tools import start_timer
+
+        try:
+            # Import ToolRouter (handle different LiveKit package versions)
+            try:
+                from livekit.agents.tool import ToolRouter
+            except ImportError:
+                from livekit.agents import ToolRouter
+                
+            # Create the tool router with our start_timer function
+            router = ToolRouter([start_timer])
+            logger.info(f"Created ToolRouter with start_timer tool")
+            
+            # Configure the model with tools and router
+            model_config = {
+                "model": "models/gemini-2.0-flash-live-001",  # Using production-ready model with function calling support
+                "voice": GLOBAL_PERSONA_CONFIG.voice,
+                "temperature": GLOBAL_PERSONA_CONFIG.temperature,
+                "instructions": GLOBAL_PERSONA_CONFIG.instructions,
+                "api_key": api_key,
+                "tools": [start_timer],      # Pass tool to advertise schema
+                "tool_router": router        # Router to execute the tool
+            }
+        except ImportError as e:
+            logger.warning(f"ToolRouter import failed, tools will not be available: {e}")
+            # Configure model without tools
+            model_config = {
+                "model": "models/gemini-2.0-flash-live-001",  # Using production-ready model with function calling support
+                "voice": GLOBAL_PERSONA_CONFIG.voice,
+                "temperature": GLOBAL_PERSONA_CONFIG.temperature,
+                "instructions": GLOBAL_PERSONA_CONFIG.instructions,
+                "api_key": api_key
+            }
+        
+        # Create the model
+        model = google.beta.realtime.RealtimeModel(**model_config)
         
         session = AgentSession(llm=model)
         logger.info("Created agent session with Google's realtime model")
@@ -288,146 +317,36 @@ async def entrypoint(ctx: agents.JobContext):
         
         # Register basic event handlers now that session exists
         session.on_data_received_sync = on_data_received_sync
-        # on_participant_change is not defined, so we don't register it
         
-        # Event handlers will be defined at the entrypoint level to properly access session
-
-
-        # First define the event handler, then register it
-        # Handler for the generation_created event
-        async def handle_generation_event(event):
-            """Handle the generation_created event from the LiveKit Google plugin.
+        # Set up simple event handlers for function calling
+        # These are handled automatically by the ToolRouter based on the @function_tool decorators
+        
+        # Log when a function call is started
+        async def on_function_call_started(func_call):
+            logger.info(f"▶ Tool called: {func_call.name} with args: {func_call.arguments}")
             
-            This function processes function calls from the Gemini model via the function_stream.
-            
-            Args:
-                event: The generation_created event from the LiveKit Google plugin
-            """
-            logger.info(f"TIMER-TEST: handle_generation_event called with event type: {type(event).__name__}")
-            logger.info(f"TIMER-DEBUG: Received Generation event of type {event.__class__.__name__}")
-                    
-            # Get the session and room name from the event context
-            ctx = event.ctx
-            session = ctx.session
-            
-            # Track if any function calls were processed
-            function_calls_processed = False
-            
-            # Log the current page context for debugging
-            session_state = get_or_create_session_state(session.room.name, session)
-            current_page = getattr(session_state, "page_type", "unknown_page")
-            logger.info(f"TOOL-DEBUG: Current page context is: {current_page}")
-            
-            # Consume the function stream to intercept function calls from Gemini
-            if hasattr(event, 'function_stream'):
-                logger.info("TIMER-TEST: Processing function_stream for potential tool calls")
-                async for func_call in event.function_stream:
-                    function_calls_processed = True
-                    tool_name = func_call.name
-                    logger.info(f"TIMER-TEST: >>> Received function call from stream: {tool_name}")
-                    logger.info(f"TIMER-TEST: Function call arguments: {func_call.arguments}")
-                    logger.info(f"TIMER-TEST: Function call ID: {func_call.call_id}")
-                    logger.info(f"TIMER-TEST: Function call type: {type(func_call).__name__}")
-                    
-                    # Add specific debugging for drawConcept
-                    if tool_name == "drawConcept":
-                        logger.info(f"VOCAB-DEBUG: drawConcept tool called on {current_page} page")
-                        try:
-                            args = json.loads(func_call.arguments)
-                            logger.info(f"VOCAB-DEBUG: drawConcept concept: {args.get('concept')}")
-                            logger.info(f"VOCAB-DEBUG: drawConcept instructions: {args.get('instructions', 'None')}")
-                        except Exception as e:
-                            logger.error(f"VOCAB-DEBUG: Error parsing drawConcept args: {e}")
-                    
-                    try:
-                        # Extract the tool information
-                        tool_name = func_call.name
-                        # The arguments are a JSON string, need to parse them
-                        tool_args = json.loads(func_call.arguments)
-                        
-                        logger.info(f"TIMER-TEST: Calling dispatcher for: {tool_name}")
-                        tool_call_data = {"name": tool_name, "arguments": tool_args}
-                        
-                        # Get the session state for this room
-                        session_state = get_or_create_session_state(ctx.room.name, session)
-                        
-                        # Process the tool call using our existing dispatcher
-                        result = await process_tool_call(session_state, session, tool_call_data)
-                        logger.info(f"TIMER-TEST: Dispatcher returned result: {result}")
-                        
-                        # Convert result to JSON string if it's not already
-                        result_json = json.dumps(result) if not isinstance(result, str) else result
-                        
-                        # Standard LiveKit pattern - Create FunctionCallOutput and append to chat context
-                        from livekit.agents import llm
-                        logger.info(f"TIMER-TEST: Creating FunctionCallOutput for {tool_name}")
-                        
-                        # Add the function result to the chat context
-                        session.chat_ctx.items.append(llm.FunctionCallOutput(
-                            call_id=func_call.call_id,
-                            name=tool_name,
-                            output=result_json,
-                            is_error=False
-                        ))
-                        
-                        # Update the chat context to send the result back to the model
-                        logger.info(f"TIMER-TEST: Updating chat context with function result")
-                        await session.update_chat_ctx(session.chat_ctx)
-                        logger.info(f"TIMER-TEST: Successfully sent result for {tool_name} back to model")
-                        
-                    except Exception as e:
-                        logger.error(f"TIMER-ERROR: Error processing function call {func_call.name}: {str(e)}")
-                        logger.exception(e)
-                        
-                        # Try to send an error response so the model doesn't hang
-                        try:
-                            from livekit.agents import llm
-                            error_msg = f"Error executing {func_call.name}: {str(e)}"
-                            
-                            # Add error result to chat context
-                            session.chat_ctx.items.append(llm.FunctionCallOutput(
-                                call_id=func_call.call_id,
-                                name=func_call.name,
-                                output=json.dumps({"error": error_msg}),
-                                is_error=True
-                            ))
-                            
-                            # Update chat context with error
-                            await session.update_chat_ctx(session.chat_ctx)
-                            logger.info(f"TIMER-TEST: Sent error response for failed {func_call.name} call")
-                        except Exception as inner_e:
-                            logger.error(f"TIMER-ERROR: Failed to send error response: {str(inner_e)}")
-            else:
-                logger.warning("TIMER-WARNING: Event does not have a function_stream attribute")
-            
-            if function_calls_processed:
-                logger.info("TIMER-TEST: All function calls processed, now waiting for model to continue")
+        # Log when a function call is completed
+        async def on_function_call_finished(func_call, output):
+            logger.info(f"✔ Tool completed: {func_call.name} → {output}")
             
             # Consume the message stream for final text output (if needed)
             if hasattr(event, 'message_stream'):
-                logger.info("TIMER-DEBUG: Processing message stream for text output")
-                async for message_gen in event.message_stream:
-                    if hasattr(message_gen, 'text_stream'):
-                        logger.info("TIMER-DEBUG: Found text stream, processing chunks")
-                        # Collect all text chunks to form complete messages
-                        complete_message = ""
-                        async for text_chunk in message_gen.text_stream:
-                            logger.info(f"TIMER-DEBUG: Received text chunk: {text_chunk}")
+                logger.debug("Processing message stream for text output")
+                for stream_entry in generation.get("streams", []):
+                    if stream_entry.get("type") == "text":
+                        logger.debug("Found text stream, processing chunks")
+                        # Process text stream
+                        for chunk in stream_entry.get("chunks", []):
+                            text_chunk = chunk.get("text", "")
+                            # Add the chunk to the complete message
                             complete_message += text_chunk
                             
-                            # Send each chunk to the frontend immediately for streaming experience
-                            try:
+                            # Send each chunk to the user as it's received for a more real-time experience
+                            if session and hasattr(session, 'send_text'):
                                 await session.send_text(text_chunk)
-                                logger.info("TIMER-DEBUG: Sent text chunk to user")
-                            except Exception as e:
-                                logger.error(f"TIMER-ERROR: Error sending text to user: {str(e)}")
-                        
-                        # Log the complete message for debugging
-                        if complete_message:
-                            logger.info(f"TIMER-DEBUG: Complete message after function call: {complete_message}")
-                    elif hasattr(message_gen, 'audio_stream'):
-                        # Handle audio response if present
-                        logger.info("TIMER-DEBUG: Found audio stream, audio will be handled by LiveKit")
+                    elif stream_entry.get("type") == "audio":
+                        # Audio will be handled automatically by LiveKit
+                        logger.debug("Found audio stream, audio will be handled by LiveKit")
                     else:
                         logger.debug("message_gen does not have text_stream or audio_stream attributes")
             else:
@@ -450,81 +369,12 @@ async def entrypoint(ctx: agents.JobContext):
                 await register_tools_with_model(session_state, tools)
                 logger.info(f"Registered {len(tools)} tools with Gemini model")
                 
-                # Add deep inspection of tools
-                logger.info("TIMER-DEBUG: Deep inspection of registered tools")
-                for i, tool in enumerate(tools):
-                    logger.info(f"TIMER-DEBUG: Tool {i+1}: {tool}")
-                    logger.info(f"TIMER-DEBUG: Tool {i+1} type: {type(tool)}")
-                    logger.info(f"TIMER-DEBUG: Tool {i+1} dir: {dir(tool)}")
-                    
-                    # If it's a custom FunctionDeclaration, log its to_dict output
-                    if hasattr(tool, 'to_dict'):
-                        try:
-                            tool_dict = tool.to_dict()
-                            logger.info(f"TIMER-DEBUG: Tool {i+1} as dict: {tool_dict}")
-                        except Exception as e:
-                            logger.error(f"TIMER-DEBUG: Error getting tool dict: {e}")
-                
-                # Log RealtimeModel's internals after tool registration
-                if hasattr(model, '_tools'):
-                    logger.info(f"TIMER-DEBUG: Model._tools after registration: {model._tools}")
-                
-                # Check for event emitter methods to see how events are registered
-                if hasattr(model, '_events') or hasattr(model, '_handlers') or hasattr(model, '_listeners'):
-                    events_attr = getattr(model, '_events', None) or getattr(model, '_handlers', None) or getattr(model, '_listeners', None)
-                    if events_attr:
-                        logger.info(f"TIMER-DEBUG: Model events: {events_attr}")
+                # Tools are registered directly with the ToolRouter and RealtimeModel
+                logger.info(f"Registered {len(tools)} tools with Gemini model")
                         
-                # Try to directly set a callback for function calls if the model has relevant methods
-                if hasattr(model, 'set_function_call_handler') or hasattr(model, 'set_tool_call_handler'):
-                    handler_method = getattr(model, 'set_function_call_handler', None) or getattr(model, 'set_tool_call_handler', None)
-                    if handler_method:
-                        logger.info("TIMER-DEBUG: Found direct function call handler method, registering")
-                        
-                        async def direct_function_call_handler(func_call):
-                            logger.info(f"TIMER-TEST: Direct function call handler triggered: {func_call}")
-                            try:
-                                # Extract the tool name and arguments
-                                tool_name = getattr(func_call, 'name', None)
-                                arguments = getattr(func_call, 'arguments', None) or getattr(func_call, 'args', None)
-                                
-                                if tool_name and arguments:
-                                    logger.info(f"TIMER-TEST: Direct handler processing tool: {tool_name} with args: {arguments}")
-                                    
-                                    # Convert arguments to dict if necessary
-                                    if not isinstance(arguments, dict):
-                                        try:
-                                            arguments = json.loads(arguments)
-                                        except:
-                                            logger.error(f"TIMER-TEST: Could not parse arguments: {arguments}")
-                                            return
-                                    
-                                    # Process the tool call
-                                    tool_call_data = {"name": tool_name, "arguments": arguments}
-                                    result = await process_tool_call(session, tool_call_data)
-                                    logger.info(f"TIMER-TEST: Direct handler tool result: {result}")
-                                    
-                                    # Return the result
-                                    return result
-                            except Exception as e:
-                                logger.error(f"TIMER-TEST: Error in direct function call handler: {e}")
-                        
-                        # Create a synchronous wrapper for the async handler
-                        def sync_function_call_handler(func_call):
-                            # Return the result from the async function
-                            result_future = asyncio.ensure_future(direct_function_call_handler(func_call))
-                            
-                            # If the API expects a result, we need to somehow get it from the future
-                            # This is a bit tricky since we're in a synchronous context
-                            # For simple handlers that don't need to return anything, this is enough
-                            return None  # Or implement a way to get the result if needed
-                        
-                        # Register the direct handler
-                        try:
-                            handler_method(sync_function_call_handler)
-                            logger.info("TIMER-DEBUG: Successfully registered direct function call handler")
-                        except Exception as e:
-                            logger.error(f"TIMER-DEBUG: Error registering direct function call handler: {e}")
+                # Function calls are now handled through the @function_tool decorator
+                # and the tool_router that was passed to the RealtimeModel
+                logger.info("Using canonical @function_tool pattern for tool calls")
     except Exception as e:
         logger.error(f"Failed to create Google realtime model: {e}")
         # Fallback to original session with commented code
@@ -537,46 +387,18 @@ async def entrypoint(ctx: agents.JobContext):
     if GLOBAL_ENABLE_TOOLS and GLOBAL_PERSONA_CONFIG.allowed_tools:
         logger.info(f"Using tool calling for {GLOBAL_PERSONA_CONFIG.allowed_tools}")
         
+    # Only proceed with session operations if session was successfully created
+    if session is not None:
         # Get tools from the session state
         session_state = get_or_create_session_state(ctx.room.name, session)
         
-        # Register tools with the underlying LiveKit RealtimeModel
-        if session_state and hasattr(session, 'update_tools'):
-            from livekit.agents import llm
-            
-            # Define timer tool using LiveKit's standard FunctionTool format
-            timer_tool = llm.FunctionTool(
-                name="startTimer",
-                description="Start a timer for the specified duration",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "duration": {
-                            "type": "integer",
-                            "description": "Duration in seconds"
-                        },
-                        "purpose": {
-                            "type": "string",
-                            "enum": ["preparation", "speaking"],
-                            "description": "Purpose of the timer"
-                        }
-                    },
-                    "required": ["duration"]
-                }
-            )
-            
-            # Register tools directly with the LiveKit session
-            try:
-                logger.info("TIMER-DEBUG: Registering tools using session.update_tools")
-                await session.update_tools([
-                    timer_tool,
-                    # Add other tools from GLOBAL_PERSONA_CONFIG.allowed_tools as needed
-                ])
-                logger.info("TIMER-DEBUG: Successfully registered tools with LiveKit session")
-            except Exception as e:
-                logger.error(f"TIMER-ERROR: Failed to register tools with session.update_tools: {e}")
-                
-            logger.info("TIMER-DEBUG: Tool calling enabled for timer functionality")
+        # Register the canonical function call event handlers
+        session.on("function_call_started", lambda fc: logger.info(f"▶ tool {fc.name} {fc.args}"))
+        session.on("function_call_finished", lambda fc, out: logger.info(f"✔ tool {fc.name} → {out}"))
+        logger.info("Registered canonical function call event handlers")
+        
+        # Function calls are automatically handled by the ToolRouter
+        logger.info("Tool calling enabled with @function_tool decorator and ToolRouter")
     else:
         logger.info("Using pattern matching for commands instead of tools")
     
@@ -627,48 +449,50 @@ async def entrypoint(ctx: agents.JobContext):
         except Exception as e:
             logger.error(f"TIMER-TEST: Error handling transcription: {e}", exc_info=True)
 
-    # Register speech event handlers
-    logger.info("Registering handlers for speech events")
+    # Register handlers for function call events
+    logger.info("Registering handlers for function call events")
+    async def on_function_call_started(event):
+        logger.info(f"TIMER-TEST: Function call started: {event}")
+        
+    async def on_function_call_finished(event, output):
+        logger.info(f"TIMER-TEST: Function call finished: {event} with output: {output}")
+        
+    # Define the generic event logger function that was missing
+    def generic_event_logger(event):
+        logger.info(f"TIMER-GENERIC: Event received: {type(event).__name__}")
+        
     try:
-        # Register a general event handler to debug all events
-        def generic_event_logger(event):
-            event_type = type(event).__name__
-            logger.info(f"TIMER-TEST: Received event of type: {event_type}")
-            if hasattr(event, "transcript"):
-                logger.info(f"TIMER-TEST: Event has transcript: {event.transcript}")
-            elif hasattr(event, "is_final") and event.is_final:
-                logger.info(f"TIMER-TEST: Received final transcription event")
-                
         # Register handlers for ALL possible events to debug
         session.on("*", generic_event_logger)
         logger.info("Successfully registered generic event logger for all events")
-            
+        
         # Register specific speech event handlers
         def sync_transcription_handler(event):
             logger.info(f"TIMER-TEST: Specific transcription handler called for event: {type(event).__name__}")
             asyncio.create_task(handle_transcription_completed(event))
-            
+        
+        # Register transcription handler
         session.on("input_audio_transcription_completed", sync_transcription_handler)
         logger.info("Successfully registered transcription handler")
         
         def sync_speech_start_handler(event):
-            logger.info(f"TIMER-TEST: Specific speech start handler called for event: {type(event).__name__}")
+            logger.info(f"TIMER-TEST: Speech start handler called for event: {type(event).__name__}")
             asyncio.create_task(handle_speech_started(event))
-            
-        session.on("input_speech_started", sync_speech_start_handler)
-        logger.info("Successfully registered speech start handler")
         
-        # Try alternative event names (LiveKit might be using different event names)
-        session.on("transcription_completed", sync_transcription_handler)
-        logger.info("Registered alternative 'transcription_completed' handler")
-        
+        # Register speech handlers
         session.on("speech_started", sync_speech_start_handler)
         logger.info("Registered alternative 'speech_started' handler")
         
         session.on("input_transcription_completed", sync_transcription_handler)
         logger.info("Registered alternative 'input_transcription_completed' handler")
+        
+        # Register function call event handlers - use the existing router from above
+        session.on("function_call_started", lambda fc: logger.info(f"▶ tool {fc.name} {fc.args}"))
+        session.on("function_call_finished", lambda fc, out: logger.info(f"✔ tool {fc.name} → {out}"))
+        logger.info("Successfully registered function call handlers")
+        
     except Exception as e:
-        logger.error(f"Error registering speech event handlers: {e}", exc_info=True)
+        logger.error(f"Error registering event handlers: {e}", exc_info=True)
 
     # Start the agent session in the specified room with tools enabled
     await session.start(
@@ -683,59 +507,16 @@ async def entrypoint(ctx: agents.JobContext):
     # Import regex for later use
     import re
     
-    # We're NOT registering any callback handlers like on_function_call or on_message
-    # Instead, we'll use the process_user_input function below to handle user input and detect function calls
-    # This is the recommended approach for Gemini API with tool calling
-    if GLOBAL_ENABLE_TOOLS:
-        logger.info(f"Tool calling enabled with {len(session_state.current_tools)} tools")
-        for tool in session_state.current_tools:
-            tool_name = getattr(tool, 'name', str(tool))
-            logger.info(f"  - Available tool: {tool_name}")
-    else:
-        logger.warning("Tool calling is disabled for this session")
+    # We now use the modern ToolRouter pattern
+    # Function calls are automatically handled by the @function_tool decorator
+    # and the ToolRouter passed to the RealtimeModel
+    logger.info(f"Tool calling enabled with @function_tool decorator and ToolRouter")
+    logger.info(f"Available tool: start_timer")
     
     # NOTE: This function is now only for handling explicit text messages (non-voice)
-    # Voice input and function calls are handled by the handle_generation_event handler
-    # registered to the "generation_created" event
-    async def process_user_input(user_input):
-        """
-        Process explicit text input (not voice) and handle any function calls.
-        
-        Note: This function is NOT in the pathway for handling voice inputs.
-        Voice inputs and their function calls are processed by handle_generation_event.
-        """
-        try:
-            # Get the session state for the current room
-            session_state = get_or_create_session_state(ctx.room.name, session)
-            
-            # Use send_message to detect function calls in the SDK-standard way
-            logger.info(f"Processing explicit text input: {user_input[:50]}...")
-            response = await send_message(session_state, user_input)
-            
-            # Check if it's a function call
-            if response and response.get('type') == 'function_call':
-                tool_name = response['tool_name']
-                tool_args = response['tool_args']
-                logger.info(f"Detected function call from explicit text: {tool_name} with args: {tool_args}")
-                
-                # Prepare the tool call data
-                tool_call_data = {
-                    "name": tool_name,
-                    "arguments": tool_args
-                }
-                
-                # Process the tool call using the central dispatcher
-                result = await process_tool_call(session, tool_call_data)
-                logger.info(f"Tool dispatcher result: {result}")
-                
-                # Send the function response back to Gemini
-                await send_function_response(session_state, tool_name, result)
-            
-            # Return the processed response
-            return response
-        except Exception as e:
-            logger.error(f"Error processing explicit text input: {e}")
-            return {"type": "error", "error": str(e)}
+    # Voice input and function calls are handled automatically by the ToolRouter
+    # Legacy process_user_input function has been removed
+    # All function calls are now handled through the canonical @function_tool pattern
     
     # Hook into key speech/text events to use our process_user_input function
     # This is the recommended approach instead of trying to modify the RealtimeModel's internals

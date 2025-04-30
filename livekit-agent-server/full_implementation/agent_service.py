@@ -48,6 +48,20 @@ try:
     from livekit.agents import AgentSession, Agent, RoomInputOptions
     from livekit.plugins import google
     from livekit.plugins import noise_cancellation
+    # Import our timer tool function
+    from tools.timer_tools import start_timer
+    
+    # Try to import ToolRouter from different possible locations
+    try:
+        from livekit.agents.tool import ToolRouter
+        logger.info("Using ToolRouter from livekit.agents.tool")
+    except ImportError:
+        try:
+            from livekit.agents import ToolRouter
+            logger.info("Using ToolRouter from livekit.agents")
+        except ImportError:
+            logger.warning("ToolRouter not found - features may be limited")
+            ToolRouter = None
 except ImportError:
     logger.error("Failed to import LiveKit packages. Please install required packages:")
     logger.error("pip install livekit-agents livekit-plugins-google livekit-plugins-noise-cancellation python-dotenv")
@@ -90,16 +104,36 @@ def entrypoint(room, identity, assistant_type="toefl", voice="Puck", temperature
     """Entrypoint function for the agent that will be called by the LiveKit CLI"""
     logger.info(f"Agent entrypoint called for room '{room}' with identity '{identity}'")
     
+    # Create tool router for handling function calls
+    router = ToolRouter([start_timer])
+    logger.info(f"Created ToolRouter with tools: start_timer")
+    
     # Create the Google realtime model with the specified voice and temperature
     try:
         model = google.beta.realtime.RealtimeModel(
-            model="gemini-2.0-flash-exp",
+            model="models/gemini-2.0-flash-live-001",  # Use correct model string with 'models/' prefix
             voice=voice,
             temperature=temperature,
             instructions=f"You are a helpful assistant for {assistant_type} speaking practice.",
             api_key=GOOGLE_API_KEY,  # Explicitly pass the API key
+            tools=[start_timer],      # Pass tool to advertise schema
+            tool_router=router,        # Router to execute the tool
         )
-        logger.info("Successfully created Google realtime model")
+        logger.info("Successfully created Google realtime model with tools enabled")
+        
+        # Get the session for adding event listeners
+        session = agent.get_session(room.name)
+        
+        # Add event listeners for function calls
+        session.on(
+            "function_call_started",
+            lambda fc: logger.info(f"▶ tool {fc.name} {fc.args}")
+        )
+        session.on(
+            "function_call_finished",
+            lambda fc, out: logger.info(f"✔ tool {fc.name} → {out}")
+        )
+        logger.info("Registered function call event listeners")
     except Exception as e:
         logger.error(f"Failed to create Google model: {str(e)}")
         return
