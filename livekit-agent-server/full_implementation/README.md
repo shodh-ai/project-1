@@ -49,6 +49,10 @@ LIVEKIT_API_SECRET=<your API Secret>
 LIVEKIT_URL=<your LiveKit server URL>
 ```
 
+also do 
+```
+python main.py download-files
+```
 ### 4. Run the Agent
 
 ```bash
