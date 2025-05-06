@@ -1,14 +1,9 @@
 import { NextResponse } from 'next/server';
-import OpenAI from 'openai';
 
 interface DialogueLine {
   text: string;
   voice: string;
 }
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 
 export async function POST(request: Request) {
   try {
@@ -21,24 +16,37 @@ export async function POST(request: Request) {
     const timestamp = Date.now();
     const filename = `${title.replace(/\s+/g, '-').toLowerCase()}-${timestamp}.mp3`;
     
+    // Format the conversation script
     const fullConversationScript = dialogueLines
       .filter(line => line.text !== "...")
       .map((line, index) => {
-        const speaker = line.text.startsWith("Speaker") || line.text.startsWith("Professor") || line.text.startsWith("Student") 
-          ? "" 
-          : line.voice === "alloy" ? "Speaker 1: " : "Speaker 2: ";
-          
+        const speakerPrefix = 
+          line.text.startsWith("Speaker") || 
+          line.text.startsWith("Professor") || 
+          line.text.startsWith("Student") 
+            ? "" 
+            : ""; 
+            
         const pause = index > 0 ? "\n\n" : "";
-        return pause + speaker + line.text;
+        return pause + speakerPrefix + line.text;
       })
       .join("");
     
-    const response = await openai.audio.speech.create({
-      model: "tts-1-hd",
-      voice: "alloy",
-      input: fullConversationScript,
-      speed: 0.9,
+    const response = await fetch('https://api.deepgram.com/v1/speak', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Token ${process.env.DEEPGRAM_API_KEY || ''}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        text: fullConversationScript  // Only provide 'text' field
+      })
     });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      throw new Error(`Deepgram API error: ${response.status} ${errorData}`);
+    }
     
     const audioData = await response.arrayBuffer();
     const base64Audio = Buffer.from(audioData).toString('base64');
@@ -49,8 +57,9 @@ export async function POST(request: Request) {
       audioUrl: dataUrl,
     });
   } catch (error: any) {
+    console.error('Deepgram TTS error:', error);
     return NextResponse.json(
-      { error: 'Failed to generate audio', message: error.message },
+      { error: 'Failed to generate audio', message: error.message || 'Unknown error' },
       { status: 500 }
     );
   }
