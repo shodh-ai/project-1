@@ -60,6 +60,16 @@ const SAMPLE_CONVERSATIONS = [
       { speaker: "Speaker 2", text: "Yes, I actually went there yesterday. It's really impressive! They have study rooms with smart boards, a much bigger cafeteria, and even a meditation room." },
       { speaker: "Speaker 1", text: "That sounds great! I've been meaning to go, but I've been so busy with midterms. Is it crowded?" },
       { speaker: "Speaker 2", text: "It depends on the time of day. In the mornings it's pretty quiet, but around noon it gets packed. I'd recommend going before 11 AM if you want to secure a good study spot." },
+      { speaker: "Speaker 1", text: "Thanks for the tip. I've been studying in the library, but it's always so hard to find a seat there." },
+      { speaker: "Speaker 2", text: "Oh, and did you know they also have a technology help desk? I was having trouble with my laptop, and they fixed it for free!" },
+      { speaker: "Speaker 1", text: "Really? That's incredibly helpful. I've been having issues with my laptop connecting to the campus WiFi." },
+      { speaker: "Speaker 2", text: "You should definitely take it to them. Also, they have these workshops every Thursday about different software that might be useful for classes." },
+      { speaker: "Speaker 1", text: "What kind of software do they cover?" },
+      { speaker: "Speaker 2", text: "Last week was about data visualization tools, and I think this week is about reference management software. The schedule is posted on the university website." },
+      { speaker: "Speaker 1", text: "That's perfect timing. I'm working on a research paper and could use help with citations. Do you need to register for these workshops?" },
+      { speaker: "Speaker 2", text: "Yes, but it's a simple online form. They limit it to 25 students per session to make sure everyone gets individual attention." },
+      { speaker: "Speaker 1", text: "I'll definitely look into that. Thanks for letting me know about all these resources!" },
+      { speaker: "Speaker 2", text: "No problem! The student center is really becoming the heart of campus activities." },
     ],
     questions: [
       {
@@ -128,6 +138,17 @@ const SAMPLE_CONVERSATIONS = [
       { speaker: "Student", text: "Professor, I read that New York City has been implementing some innovative approaches. Could you elaborate on those?" },
       { speaker: "Professor", text: "Yes, excellent question. New York has been a leader in several areas. Their green roof initiative has been particularly successful. They've converted over 730 acres of standard rooftops into green spaces." },
       { speaker: "Student", text: "What are the main benefits of these green roofs?" },
+      { speaker: "Professor", text: "There are multiple benefits. First, they help reduce the urban heat island effect by absorbing less heat than traditional roofs. Second, they improve air quality by filtering pollutants. Third, they provide insulation, which reduces energy costs for heating and cooling." },
+      { speaker: "Student", text: "That's impressive. Do they also help with stormwater management?" },
+      { speaker: "Professor", text: "Absolutely. Green roofs can retain 70-90% of rainwater during summer months, which significantly reduces stormwater runoff and helps prevent flooding. This is crucial for cities like New York that have aging sewer systems." },
+      { speaker: "Student", text: "Are there any challenges to implementing these green roofs?" },
+      { speaker: "Professor", text: "Yes, there are several challenges. The initial installation cost is higher than traditional roofing. Some buildings require structural reinforcement to support the additional weight. And there's ongoing maintenance required to keep the vegetation healthy." },
+      { speaker: "Student", text: "Has the city provided any incentives to encourage more buildings to adopt green roofs?" },
+      { speaker: "Professor", text: "Yes, they've implemented a tax abatement program that covers about $5.23 per square foot of green roof installation. There are also expedited permit processes for buildings that incorporate green infrastructure." },
+      { speaker: "Student", text: "That's helpful. Do you think other cities could replicate this model?" },
+      { speaker: "Professor", text: "Many cities are already adapting similar approaches, but it's important to consider local climate conditions, building regulations, and available resources. What works in New York might need modifications for cities in different climate zones." },
+      { speaker: "Student", text: "Thank you for explaining that. I'm particularly interested in how these solutions might apply to smaller cities." },
+      { speaker: "Professor", text: "That's a great focus area. In fact, I'd like everyone to prepare a case study on a small to medium-sized city's sustainability initiatives for next week's discussion." },
     ],
     questions: [
       {
@@ -196,6 +217,11 @@ const SAMPLE_CONVERSATIONS = [
       { speaker: "Speaker 2", text: "I've reviewed all three candidates and I think Sarah is the most qualified." },
       { speaker: "Speaker 1", text: "I agree her resume is impressive, but I'm concerned about her lack of experience in our industry." },
       { speaker: "Speaker 2", text: "That's true, but she has transferable skills and seems like a quick learner." },
+      { speaker: "Speaker 1", text: "What about Michael? He has five years of directly relevant experience." },
+      { speaker: "Speaker 2", text: "Yes, but his references mentioned he can be difficult to work with sometimes." },
+      { speaker: "Speaker 1", text: "And then there's Jessica. She has a good balance of experience and seems very collaborative." },
+      { speaker: "Speaker 2", text: "I think we should go with Sarah. She had the strongest interview and showed a lot of initiative." },
+      { speaker: "Speaker 1", text: "You've convinced me. Let's offer her the position and see if she accepts." },
     ],
     questions: [
       {
