@@ -1,42 +1,50 @@
-# Build stage
-FROM node:18-slim AS builder
+# Use slim Node image with build tools
+FROM node:23-slim
 
 # Set working directory
 WORKDIR /app
 
-# Copy package files
+# Install system deps for canvas and Python
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 \
+    python3-venv \
+    python3-pip \
+    make \
+    g++ \
+    pkg-config \
+    libcairo2-dev \
+    libpango1.0-dev \
+    libjpeg-dev \
+    libgif-dev \
+    librsvg2-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install JS dependencies
 COPY package*.json ./
+RUN npm install
 
-# Install dependencies
-RUN npm ci
-
-# Copy the rest of the application
+# Copy the entire project
 COPY . .
 
-# Build the application
-RUN npm run build
+# Set up Python virtual environment and install dependencies
+RUN python3 -m venv /app/livekit-agent-server/venv && \
+    /app/livekit-agent-server/venv/bin/pip install --upgrade pip && \
+    /app/livekit-agent-server/venv/bin/pip install -r /app/livekit-agent-server/requirements.txt
 
-# Production stage
-FROM node:18-slim
+RUN /app/livekit-agent-server/venv/bin/pip install python-dotenv
+RUN ls
+RUN /app/livekit-agent-server/venv/bin/python /app/livekit-agent-server/vpa_new/main.py download-files
 
-WORKDIR /app
+RUN cd /app/webrtc-token-service
+RUN npm install
+RUN cd ..
 
-# Copy package files
-COPY package*.json ./
+RUN cd /app/vocab-canvas-service
+RUN npm install
+RUN cd ..
 
-# Install production dependencies only
-RUN npm ci --only=production
-
-# Copy built files from builder stage
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/next.config.js ./
-
-# Expose the application port
+# Expose the Next.js dev server port
 EXPOSE 3000
+EXPOSE 3002
 
-# Set environment variables
-ENV NODE_ENV=production
-
-# Start the application
-CMD ["npm", "start"] 
+CMD ["bash", "-c", "cd /app/webrtc-token-service && npm run dev & /app/livekit-agent-server/venv/bin/python /app/livekit-agent-server/vpa_new/main.py connect --room Speakingpage --page-path speakingpage & exec npm run dev"]

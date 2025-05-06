@@ -1,5 +1,6 @@
 {
   "/not-found": "app/not-found.js",
+  "/page": "app/page.js",
   "/speakingpage/page": "app/speakingpage/page.js",
   "/api/questions/route": "app/api/questions/route.js",
   "/api/auth/[...nextauth]/route": "app/api/auth/[...nextauth]/route.js"

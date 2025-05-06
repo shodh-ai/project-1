@@ -58,13 +58,17 @@ python3 external_agent.py
 
 ```
 
+```sh
+python main.py download-files
+```
+
 ### Start the LiveKit Voice Agent
 In another terminal:
 ```sh
 cd vpa_new
 python3 main_copy.py connect --room <room-name> --page-path <page-path>
 #for speaking room 
-python3 main.py_copy connect --room Speakingpage --page-path speakingpage
+python3 main.py connect --room Speakingpage --page-path speakingpage
 #for vocabulary room 
 python3 main.py_copy connect --room Vocabularypractise --page-path vocabpage
 ```
