@@ -1,79 +1,110 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useState, useEffect } from 'react';
 import LiveKitSession from '@/components/LiveKitSession';
 import SpeakingTimer from '@/components/SpeakingTimer';
+import ProtectedRoute from '@/components/ProtectedRoute';
+import { useSession } from 'next-auth/react';
 
-export default function Page() {
+// Import API clients
+import contentApi from '@/api/contentService';
+import userProgressApi from '@/api/userProgressService';
+
+function SpeakingPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const { data: session } = useSession();
   const [showTimerNotification, setShowTimerNotification] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [question, setQuestion] = useState<{
-    id: number;
-    text: string;
-    answer?: {
-      text: string;
-      highlights: Array<{ text: string; start: number; end: number }>;
-    }
+  const [userName, setUserName] = useState('');
+  const [topic, setTopic] = useState<{
+    topicId: string;
+    title: string;
+    promptText: string;
+    difficultyLevel?: number | null;
   } | null>(null);
-  const [questionId, setQuestionId] = useState<number | null>(null);
   
   // Room configuration
   const roomName = 'Speakingpage';
-  const userName = 'quickstart-user';
   
-  // Load a question from the database
+  // Get username from session or localStorage when component mounts
   useEffect(() => {
-    const fetchQuestion = async () => {
+    if (session?.user?.name) {
+      setUserName(session.user.name);
+    } else {
+      const storedUserName = localStorage.getItem('userName');
+      if (storedUserName) {
+        setUserName(storedUserName);
+      }
+    }
+  }, [session]);
+  
+  // Load a speaking topic from the Content Service API
+  useEffect(() => {
+    const fetchSpeakingTopic = async () => {
       setLoading(true);
       setError(null);
       try {
-        // If questionId is set, fetch that specific question, otherwise get all and pick a random one
-        if (questionId) {
-          const response = await fetch('/api/questions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ id: questionId })
-          });
-          
-          if (!response.ok) throw new Error('Failed to fetch question');
-          const data = await response.json();
-          setQuestion(data);
-        } else {
-          // Get all questions and select a random one
-          const response = await fetch('/api/questions');
-          if (!response.ok) throw new Error('Failed to fetch questions');
-          const data = await response.json();
-          
-          if (data.length > 0) {
-            const randomIndex = Math.floor(Math.random() * data.length);
-            setQuestion(data[randomIndex]);
-            setQuestionId(data[randomIndex].id);
-          } else {
-            throw new Error('No questions available');
-          }
-        }
+        // Get topic ID from URL query parameters if available
+        const topicIdFromUrl = searchParams?.get('topicId');
+        
+        // Default topic IDs from the API documentation
+        const availableTopicIds = ['topic-daily-routine', 'topic-climate-change', 'topic-technology'];
+        
+        // Use the topic ID from URL or default to the first in our list
+        const targetTopicId = topicIdFromUrl || availableTopicIds[0];
+        
+        // Fetch the speaking topic from the content service
+        const topicData = await contentApi.getSpeakingTopic(targetTopicId);
+        setTopic(topicData);
+        
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Unknown error occurred');
-        console.error('Error fetching question:', err);
+        console.error('Error fetching speaking topic:', err);
+        setError('Failed to load speaking topic. Please try again later.');
       } finally {
         setLoading(false);
       }
     };
     
-    fetchQuestion();
-  }, [questionId]);
+    fetchSpeakingTopic();
+  }, [searchParams]);
   
-  // Function to load a different question
-  const loadNewQuestion = () => {
-    setQuestionId(null); // This will trigger the useEffect to get a random question
+  // Function to load a different speaking topic
+  const loadNewTopic = () => {
+    // Available topic IDs from the API documentation
+    const availableTopicIds = ['topic-daily-routine', 'topic-climate-change', 'topic-technology'];
+    
+    // Get a random topic ID different from the current one
+    const currentTopicId = topic?.topicId;
+    const availableIds = availableTopicIds.filter(id => id !== currentTopicId);
+    const randomIndex = Math.floor(Math.random() * availableIds.length);
+    const newTopicId = availableIds[randomIndex];
+    
+    // Navigate to the same page with a new topic ID
+    router.push(`/speakingpage?topicId=${newTopicId}`);
   };
   
   // Handle leaving the room
   const handleLeave = () => {
-    router.push('/');
+    // Record task completion with the user progress service if logged in
+    try {
+      const token = localStorage.getItem('token');
+      if (token && topic) {
+        userProgressApi.recordTaskCompletion(
+          topic.topicId, // using topicId as taskId
+          100, // score (arbitrary for now)
+          { speakingCompleted: true },
+          undefined, // no SRS for speaking
+          true
+        );
+      }
+    } catch (err) {
+      console.error('Error recording task completion:', err);
+    }
+    
+    router.push('/roxpage');
   };
   
   // Handle timer end
@@ -103,48 +134,48 @@ export default function Page() {
         </div>
       )}
       
-      {/* Question refresh button */}
+      {/* Topic refresh button */}
       <button 
-        onClick={loadNewQuestion}
+        onClick={loadNewTopic}
         className="fixed top-4 right-4 z-50 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded-md shadow-lg transition-colors duration-200"
       >
-        New Question
+        New Topic
       </button>
       
       {loading ? (
         <div className="flex items-center justify-center h-screen w-full">
           <div className="text-center">
             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto"></div>
-            <p className="mt-4">Loading question...</p>
+            <p className="mt-4">Loading speaking topic...</p>
           </div>
         </div>
       ) : error ? (
         <div className="flex items-center justify-center h-screen w-full">
           <div className="text-center bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded max-w-md">
-            <p className="font-bold">Error loading question</p>
+            <p className="font-bold">Error loading speaking topic</p>
             <p>{error}</p>
             <button 
-              onClick={loadNewQuestion} 
+              onClick={loadNewTopic} 
               className="mt-3 bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded"
             >
               Try Again
             </button>
           </div>
         </div>
-      ) : question ? (
+      ) : topic ? (
         <LiveKitSession
           roomName={roomName}
-          userName={userName}
-          questionText={question.text}
-          sessionTitle="Speaking Practice Session"
+          userName={userName || 'student-user'}
+          questionText={topic.promptText}
+          sessionTitle={`Speaking Practice: ${topic.title}`}
           onLeave={handleLeave}
         />
       ) : (
         <div className="flex items-center justify-center h-screen w-full">
           <div className="text-center">
-            <p>No question available</p>
+            <p>No speaking topic available</p>
             <button 
-              onClick={loadNewQuestion} 
+              onClick={loadNewTopic} 
               className="mt-3 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded"
             >
               Try Again
@@ -153,5 +184,13 @@ export default function Page() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function Page() {
+  return (
+    <ProtectedRoute>
+      <SpeakingPageContent />
+    </ProtectedRoute>
   );
 }
