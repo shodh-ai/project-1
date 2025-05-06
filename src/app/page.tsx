@@ -28,6 +28,14 @@ export default function Home() {
         </Link>
         
         <Link 
+          href="/listeningpage" 
+          className="p-6 bg-white rounded-lg shadow-md hover:shadow-lg transition-shadow"
+        >
+          <h2 className="text-xl font-semibold text-blue-600 mb-2">Listening Practice</h2>
+          <p className="text-gray-600">Improve your listening comprehension with audio exercises</p>
+        </Link>
+        
+        <Link 
           href="/writingpage" 
           className="p-6 bg-white rounded-lg shadow-md hover:shadow-lg transition-shadow"
         >
