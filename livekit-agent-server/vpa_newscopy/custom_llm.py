@@ -19,13 +19,12 @@ class CustomLLMBridge(LLM):
     """
     A custom LLM component that bridges to an external backend script/service.
     """
-    def __init__(self, agent_url: str, page_identifier: Optional[str] = None):
+    def __init__(self, url: str = MY_CUSTOM_AGENT_URL):
         super().__init__()
-        if not agent_url:
-            raise ValueError("External agent URL (agent_url) must be provided.")
-        self._agent_url = agent_url
-        self._page_identifier = page_identifier
-        logger.info(f"CustomLLMBridge initialized. Agent URL: {self._agent_url}, Page Identifier: {self._page_identifier}")
+        if not url:
+            raise ValueError("External agent URL cannot be empty. Set MY_CUSTOM_AGENT_URL environment variable.")
+        self._url = url
+        logger.info(f"CustomLLMBridge initialized. Will send requests to: {self._url}")
 
     def chat(self, *, chat_ctx: ChatContext = None, tools = None, tool_choice = None):
         """
@@ -160,59 +159,51 @@ class CustomLLMBridge(LLM):
                     logger.error(f"Error extracting content from user message: {e}")
                     transcript = "[Error: Could not extract transcript]"
                 
-                logger.info(f"Sending transcript to external agent at {self._agent_url}: '{transcript}'")
-                logger.debug(f"User message object: {user_message}, type: {type(user_message)}")
+                logger.info(f"Sending transcript to external agent at {self._url}: '{transcript}'")
+                # Add more verbosity to help debug
+                logger.debug(f"User message object: {user_message}")
+                logger.debug(f"User message type: {type(user_message)}")
 
                 response_text = ""
-                action_from_response = None
-                payload_from_response = None
-
                 try:
-                    async with aiohttp.ClientSession() as http_session:
-                        request_payload = {"transcript": transcript}
-                        if self._page_identifier:
-                            request_payload["page_identifier"] = self._page_identifier
-                        
-                        logger.debug(f"Sending payload to {self._agent_url}: {request_payload}")
-                        async with http_session.post(self._agent_url, json=request_payload) as response:
-                            response.raise_for_status()
+                    # Use aiohttp for async HTTP requests
+                    async with aiohttp.ClientSession() as session:
+                        payload = {"transcript": transcript} # Send transcript as JSON
+                        async with session.post(self._url, json=payload) as response:
+                            response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
                             result = await response.json()
                             response_text = result.get("response", "")
-                            logger.info(f"Raw response from external agent: {result}")
+                            logger.info(f"Raw response from agent: {result}")
                             logger.info(f"Extracted response_text: '{response_text}'")
                             
-                            action_from_response = result.get("action")
-                            payload_from_response = result.get("payload")
-                            logger.info(f"Extracted action: {action_from_response}, payload_from_response available: {payload_from_response is not None}")
+                            # Check for action and payload
+                            action = result.get("action")
+                            payload = result.get("payload")
+                            logger.info(f"Extracted action: {action}, payload available: {payload is not None}")
                             
-                            if action_from_response:
-                                logger.info(f"Action received: {action_from_response} with payload: {payload_from_response}")
+                            logger.info(f"Received response from external agent: '{response_text}'")
+                            if action:
+                                logger.info(f"Action received: {action} with payload: {payload}")
 
                 except aiohttp.ClientError as e:
-                    logger.error(f"Error communicating with external agent at {self._agent_url}: {e}")
-                    response_text = "Sorry, I encountered an error trying to process your request."
+                    logger.error(f"Error communicating with external agent at {self._url}: {e}")
+                    response_text = "Sorry, I encountered an error trying to process your request." # Error message
                 except Exception as e:
-                    logger.error(f"An unexpected error occurred in CustomLLMBridge chat processing: {e}", exc_info=True)
-                    response_text = "Sorry, an unexpected error occurred."
+                    logger.error(f"An unexpected error occurred in CustomLLMBridge: {e}")
+                    response_text = "Sorry, an unexpected error occurred." # Generic error message
 
-                # Prepare metadata for the ChatChunk if action and payload were received
-                response_metadata = None
-                if action_from_response and payload_from_response is not None: # Ensure payload is not None explicitly
-                    # Based on MEMORY[b0bdc183-f651-4baa-aa9e-73a2bf3b1f84]
-                    # The frontend expects message.delta.metadata.dom_actions (JSON string)
-                    # And dom_actions is an array of action objects.
-                    # The external agent sends action & payload, CustomLLMBridge wraps it into dom_actions.
-                    dom_actions_content = [{
-                        "action": action_from_response,
-                        "payload": payload_from_response
-                    }]
-                    response_metadata = {
-                        # The memory states frontend expects `dom_actions` in `message.delta.metadata.dom_actions` (JSON string)
-                        # However, the ChatChunk metadata is a dict. The LiveKit SDK might handle serialization.
-                        # For now, let's pass it as a dict. If it needs to be a JSON string, we'll adjust.
-                        "dom_actions": dom_actions_content 
+                # Yield the response back to the LiveKit pipeline as a single chunk
+                # LiveKit expects an AsyncIterable of ChatChunk
+                # Create metadata with action and payload if present
+                metadata = None
+                if action and payload:
+                    metadata = {
+                        "dom_actions": [{
+                            "action": action,
+                            "payload": payload
+                        }]
                     }
-                    logger.info(f"Created metadata for ChatChunk: {response_metadata}")
+                    logger.info(f"Created metadata: {metadata}")
                 
                 # Debug the outgoing chunk
                 chunk_id = str(uuid.uuid4())

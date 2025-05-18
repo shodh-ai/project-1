@@ -4,248 +4,215 @@ LiveKit Voice Processing Agent (VPA) Implementation with Custom Backend Bridge
 
 This script implements a LiveKit voice agent using the VPA pipeline,
 replacing the standard LLM with a bridge to a custom backend script.
+It operates as a LiveKit Agent Worker, configured per job via metadata.
 """
 
 import os
 import sys
 import logging
-import argparse
 import asyncio
 from pathlib import Path
 from dotenv import load_dotenv
 import json
 
-# --- (Keep your existing logging setup) ---
-logging.basicConfig(level=logging.DEBUG,
-                    format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- (Keep your existing imports for livekit, plugins, etc.) ---
 from livekit import agents
 from livekit.agents import AgentSession, Agent, RoomInputOptions
+
 try:
     from livekit.plugins import noise_cancellation
-    from livekit.plugins import deepgram, silero # Removed openai import
+    from livekit.plugins import deepgram, silero
     from livekit.plugins.turn_detector.multilingual import MultilingualModel
-    from livekit.plugins import avatar # Import avatar plugin
+    from livekit.plugins.tavus import AvatarSession as TavusAvatarPlugin # Changed to Tavus
 except ImportError as e:
     logger.error(f"Failed to import required packages: {e}")
-    # Adjusted pip install command if needed (removed openai)
     logger.error("Please install the missing packages: pip install 'livekit-agents[deepgram,silero,turn-detector]~=1.0' 'livekit-plugins-noise-cancellation~=0.2' python-dotenv aiohttp")
     sys.exit(1)
 
-# --- Import your Custom LLM Bridge ---
 try:
-    from custom_llm import CustomLLMBridge # Assuming you saved the class above in custom_llm.py
+    from custom_llm import CustomLLMBridge
 except ImportError:
     logger.error("Failed to import CustomLLMBridge. Make sure custom_llm.py exists and aiohttp is installed.")
     sys.exit(1)
 
-# --- (Keep your existing .env loading and checks) ---
-# Ensure MY_CUSTOM_AGENT_URL is set in your .env or environment
 script_dir = Path(__file__).resolve().parent
 env_path = script_dir / '.env'
 if env_path.exists():
     logger.info(f"Loading environment from: {env_path}")
     load_dotenv(dotenv_path=env_path)
 else:
-    logger.warning(f"No .env file found at {env_path}, using environment variables")
+    logger.warning(f"No .env file found at {env_path}, using environment variables from system")
     load_dotenv()
 
-# Verify critical environment variables (removed OPENAI_API_KEY)
-required_vars = ["LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "DEEPGRAM_API_KEY", "MY_CUSTOM_AGENT_URL"] # Added custom agent URL
+required_vars = ["LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "DEEPGRAM_API_KEY", "MY_CUSTOM_AGENT_URL"]
+AVATAR_SERVICE_URL = os.getenv("AVATAR_SERVICE_URL", "https://avatar.livekit.io")
+AVATAR_API_KEY = os.getenv("AVATAR_API_KEY", "")
 
-# Optional avatar service environment variables
-AVATAR_SERVICE_URL = os.getenv("AVATAR_SERVICE_URL", "https://avatar.livekit.io")  # Default to LiveKit's service
-AVATAR_API_KEY = os.getenv("AVATAR_API_KEY", "")  # Optional API key for avatar service
-for var in required_vars:
-    value = os.getenv(var)
+for var_name in required_vars:
+    value = os.getenv(var_name)
     if not value:
-        logger.error(f"Missing required environment variable: {var}")
+        logger.error(f"Missing required environment variable: {var_name}")
         sys.exit(1)
-    if var == "DEEPGRAM_API_KEY":
-        logger.info(f"DEEPGRAM_API_KEY: {value[:8]}...{value[-4:]} (length: {len(value)})")
-    if var == "MY_CUSTOM_AGENT_URL":
-        logger.info(f"Using custom agent URL: {value}")
+    if var_name == "DEEPGRAM_API_KEY":
+        logger.debug(f"DEEPGRAM_API_KEY: {value[:8]}...{value[-4:]} (length: {len(value)})")
+    if var_name == "MY_CUSTOM_AGENT_URL":
+        logger.info(f"Global custom agent URL: {value}")
 
-
-# --- (Keep Global configuration, but temperature might not be needed unless your backend uses it) ---
-GLOBAL_PAGE_PATH = "speakingpage"
-GLOBAL_MODEL = "aura-asteria-en" # Deepgram TTS model
-# GLOBAL_TEMPERATURE = 0.7 # No longer directly used by OpenAI LLM here
-GLOBAL_INSTRUCTIONS = "You are a helpful voice AI assistant powered by a custom backend. Be concise." # Updated instructions slightly
-
-# Avatar configuration
-GLOBAL_AVATAR_ENABLED = True  # Enable/disable avatar feature
-GLOBAL_AVATAR_MODEL = "default"  # Avatar model to use
-GLOBAL_AVATAR_STYLE = "casual"  # Avatar style (e.g., casual, business)
-
-
-# --- (Keep your Assistant class as is) ---
 class Assistant(Agent):
-    """Simple voice AI assistant"""
-    def __init__(self) -> None:
-        super().__init__(instructions=GLOBAL_INSTRUCTIONS)
+    """Simple voice AI assistant, configured per job."""
+    def __init__(self, llm_bridge: CustomLLMBridge, instructions: str) -> None:
+        super().__init__(llm=llm_bridge, instructions=instructions)
+        self._llm_bridge = llm_bridge
+        logger.info(f"Assistant initialized with instructions: '{instructions[:50]}...' Llm bridge: {llm_bridge}")
 
     async def on_transcript(self, transcript: str, language: str) -> None:
         """Called when a user transcript is received"""
-        logger.info(f"USER SAID: '{transcript}' (language: {language})")
+        logger.info(f"USER SAID (room: {self.ctx.room.name}, job: {self.ctx.job.id}): '{transcript}' (lang: {language})")
 
     async def on_reply(self, message: str, audio_url: str = None) -> None:
         """Override to log when assistant replies"""
-        logger.info(f"ASSISTANT REPLY (from custom backend): '{message}'") # Clarified origin
-        if audio_url:
-            logger.info(f"AUDIO URL: {audio_url}")
-        else:
-            logger.warning("NO AUDIO URL PROVIDED - Speech not generated!")
-
+        logger.info(f"ASSISTANT REPLIED (room: {self.ctx.room.name}, job: {self.ctx.job.id}): '{message[:100]}...' (audio_url: {audio_url})")
 
 async def entrypoint(ctx: agents.JobContext):
-    """Main entrypoint for the agent."""
-    try:
-        await ctx.connect()
-        logger.info(f"Connected to LiveKit room '{ctx.room.name}'")
-    except Exception as e:
-        logger.error(f"Failed to connect to LiveKit room: {e}")
+    """Main entrypoint for the agent, configured by job metadata."""
+    logger.info(f"Agent job {ctx.job.id} received for room: {ctx.room.name}")
+    logger.debug(f"Raw Job metadata from ctx.job.metadata: {ctx.job.metadata}")
+
+    parsed_metadata = {}
+    if ctx.job.metadata:
+        if isinstance(ctx.job.metadata, str) and ctx.job.metadata.strip(): # If it's a non-empty string
+            try:
+                parsed_metadata = json.loads(ctx.job.metadata)
+                if not isinstance(parsed_metadata, dict):
+                    logger.warning(f"Metadata parsed from string but is not a dictionary (type: {type(parsed_metadata)}). Value: '{ctx.job.metadata}'. Defaulting to empty dict.")
+                    parsed_metadata = {}
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse job metadata JSON string '{ctx.job.metadata}': {e}. Defaulting to empty dict.")
+                parsed_metadata = {}
+        elif isinstance(ctx.job.metadata, dict): # If it's already a dictionary
+            parsed_metadata = ctx.job.metadata
+        else:
+            logger.info(f"Job metadata is not a non-empty string or a dict (type: {type(ctx.job.metadata)}). Value: '{ctx.job.metadata}'. Defaulting to empty dict.")
+            # parsed_metadata remains {}
+    else:
+        logger.info("Job metadata is None or empty. Defaulting to empty dict.")
+        # parsed_metadata remains {}
+
+    metadata = parsed_metadata
+    logger.debug(f"Processed metadata: {metadata}")
+
+    page_identifier = metadata.get("page_identifier", "default_page")
+    tts_model_name = metadata.get("tts_model", "aura-asteria-en")
+    initial_instructions = metadata.get("initial_instructions", "You are a helpful AI. Be concise.")
+    deepgram_model = metadata.get("deepgram_model", "nova-2-general")
+    deepgram_language = metadata.get("deepgram_language", "en-US")
+    stt_interim_results = metadata.get("stt_interim_results", False)
+
+    job_avatar_enabled = metadata.get("avatar_enabled", True)
+    job_avatar_model = metadata.get("avatar_model", "default")
+    job_avatar_style = metadata.get("avatar_style", "casual")
+
+    custom_agent_url = os.getenv("MY_CUSTOM_AGENT_URL")
+    if not custom_agent_url:
+        logger.error("MY_CUSTOM_AGENT_URL environment variable not set. Cannot proceed.")
         return
 
-    logger.info(f"Using Deepgram TTS model: {GLOBAL_MODEL}")
-    # logger.info(f"Using temperature: {GLOBAL_TEMPERATURE}") # Temperature not directly applicable here
+    logger.info(f"Job Config - page_identifier: {page_identifier}, tts_model: {tts_model_name}, deepgram_model: {deepgram_model}")
+    logger.info(f"Avatar enabled in job metadata: {job_avatar_enabled} (Model: {job_avatar_model}, Style: {job_avatar_style})")
+    # --- TEMPORARY OVERRIDE: Disable avatar for core functionality testing ---
+    job_avatar_enabled = False
+    logger.warning("TEMP OVERRIDE: Tavus Avatar functionality has been temporarily disabled in main_copy.py.")
+    # --- END TEMPORARY OVERRIDE ---
 
-    assistant = Assistant()
+    stt = deepgram.STT(
+        language=deepgram_language,
+        detect_language=True,
+        interim_results=stt_interim_results,
+        smart_format=True,
+        model=deepgram_model,
+    )
+    logger.info(f"STT (Deepgram) initialized with model: {deepgram_model}, language: {deepgram_language}")
+
+    tts = silero.TTS(model_name=tts_model_name)
+    logger.info(f"TTS (Silero) initialized with model: {tts_model_name}")
+
+    llm_bridge = CustomLLMBridge(
+        agent_url=custom_agent_url,
+        page_identifier=page_identifier
+    )
+    logger.info(f"CustomLLMBridge initialized for page_identifier: {page_identifier}")
+
+    avatar_plugin_instance = None # Variable name kept, will hold TavusAvatarPlugin instance
+    if job_avatar_enabled:
+        # Instantiate TavusAvatarPlugin (which is AvatarSession from livekit.plugins.tavus)
+        # Assuming it might use service_url and api_key. Model/style from metadata might be handled differently by Tavus.
+        avatar_plugin_instance = TavusAvatarPlugin(
+            service_url=AVATAR_SERVICE_URL, # Attempting to pass this
+            api_key=AVATAR_API_KEY          # Attempting to pass this
+        )
+        logger.info(f"Tavus Avatar plugin initialized (model: {job_avatar_model}, style: {job_avatar_style} from metadata will be used by Tavus if applicable).")
+    else:
+        logger.info("Tavus Avatar plugin disabled for this job.")
+
+    assistant_instance = Assistant(llm_bridge=llm_bridge, instructions=initial_instructions)
 
     try:
-        logger.info("Creating agent session with VPA pipeline using CustomLLMBridge...")
-        
-        # Configure avatar if enabled
-        avatar_plugin = None
-        if GLOBAL_AVATAR_ENABLED:
-            logger.info(f"Configuring avatar with model: {GLOBAL_AVATAR_MODEL}, style: {GLOBAL_AVATAR_STYLE}")
-            # Create avatar configuration
-            avatar_config = {
-                "model": GLOBAL_AVATAR_MODEL,
-                "style": GLOBAL_AVATAR_STYLE,
-                # Add additional configuration as needed
-                "voice_sync": True,  # Synchronize avatar with voice
-                "background": "transparent"  # Transparent background
-            }
-            
-            # Initialize avatar plugin
-            try:
-                avatar_plugin = avatar.AvatarRenderer(
-                    service_url=AVATAR_SERVICE_URL,
-                    api_key=AVATAR_API_KEY if AVATAR_API_KEY else None,
-                    config=avatar_config
-                )
-                logger.info("Avatar plugin initialized successfully")
-            except Exception as e:
-                logger.error(f"Failed to initialize avatar plugin: {e}")
-                avatar_plugin = None
-        
+        logger.info("Creating agent session...")
         session = AgentSession(
-            stt=deepgram.STT(model="nova-3", language="multi"),
-            # --- Use your CustomLLMBridge here ---
-            llm=CustomLLMBridge(), # It reads the URL from the environment variable
-            # --- Keep TTS, VAD, Turn Detection ---
-            tts=deepgram.TTS(model=GLOBAL_MODEL),
-            vad=silero.VAD.load(),
-            turn_detection=MultilingualModel(),
-            # Add avatar plugin if enabled
-            avatar=avatar_plugin
+            room=ctx.room,
+            agent=assistant_instance,
+            stt=stt,
+            tts=tts,
+            llm=llm_bridge,
+            vad=agents.vad.SileroVad(),
+            turn_detection=MultilingualModel()
+            # avatar argument removed from AgentSession constructor as per memory
         )
         logger.info("Agent session created successfully")
 
+        if avatar_plugin_instance: # If TavusAvatarPlugin was initialized
+            logger.info("Starting Tavus Avatar plugin session...")
+            # Call start() on the TavusAvatarPlugin instance as per MEMORY[6dd07351-1d2c-4151-b8d4-b16c50c75592]
+            await avatar_plugin_instance.start(agent_session=session, room=ctx.room)
+            logger.info("Tavus Avatar plugin session started.")
+
         logger.info("Starting agent session...")
         await session.start(
-            room=ctx.room,
-            agent=assistant,
             room_input_options=RoomInputOptions(
                 noise_cancellation=noise_cancellation.BVC(),
             ),
         )
         logger.info("Agent session started successfully")
 
-        # Send a greeting (this will now go through your custom backend if it handles instructions)
-        # Note: The CustomLLMBridge currently only sends the *last user message*.
-        # Handling initial greetings or system prompts might require adjusting the bridge
-        # or how your backend interprets requests with no preceding user message.
-        # For simplicity, let's try sending it. The bridge might need refinement
-        # if your backend expects a specific format for initial prompts.
-        logger.info("Sending greeting via custom backend...")
-        try:
-            await session.generate_reply(
-                instructions="Greet the user with a simple hello and introduce yourself."
-            )
-            logger.info("Greeting request sent.")
-        except Exception as e:
-            logger.error(f"Failed to send greeting request: {e}")
+        if initial_instructions and initial_instructions.strip() != "":
+            logger.info(f"Attempting to send initial instructions as first utterance: '{initial_instructions[:100]}...'")
+            try:
+                await assistant_instance.say(initial_instructions, allow_interruptions=False)
+                logger.info("Initial instructions sent as a statement by the agent.")
+            except Exception as e:
+                logger.error(f"Failed to send initial instructions via agent.say: {e}")
+        else:
+            logger.info("No specific initial instructions to send as a greeting for this job.")
 
-        logger.info(f"Voice agent is running for {GLOBAL_PAGE_PATH}, bridged to custom backend.")
+        logger.info(f"Voice agent is running for job {ctx.job.id} (page_identifier: {page_identifier}) in room {ctx.room.name}.")
 
-        try:
-            disconnect_future = asyncio.Future()
-            await disconnect_future
-        except asyncio.CancelledError:
-            logger.info("Agent canceled")
+        await asyncio.sleep(3600)
+        logger.info(f"Job {ctx.job.id} processing finished or timed out.")
+
+    except asyncio.CancelledError:
+        logger.info(f"Job {ctx.job.id} was canceled.")
     except Exception as e:
-        logger.error(f"Error in entrypoint: {e}")
-
+        logger.error(f"Error in entrypoint for job {ctx.job.id}: {e}", exc_info=True)
+    finally:
+        logger.info(f"Cleaning up for job {ctx.job.id}.")
 
 if __name__ == "__main__":
-    # --- (Keep your argument parsing, but remove --temperature if not needed) ---
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument('--page-path', type=str, help='Path to web page')
-    parser.add_argument('--tts-model', type=str, help='Deepgram TTS model to use')
-    # Add avatar-related arguments
-    parser.add_argument('--avatar-enabled', type=bool, help='Enable or disable avatar')
-    parser.add_argument('--avatar-model', type=str, help='Avatar model to use')
-    parser.add_argument('--avatar-style', type=str, help='Avatar style to use')
-    # parser.add_argument('--temperature', type=float, help='LLM temperature') # Removed
-
-    args, _ = parser.parse_known_args()
-
-    if args.page_path:
-        GLOBAL_PAGE_PATH = args.page_path
-        logger.info(f"Using page path: {GLOBAL_PAGE_PATH}")
-
-    if args.tts_model:
-        GLOBAL_MODEL = args.tts_model
-        logger.info(f"Using TTS model: {GLOBAL_MODEL}")
-        
-    # Handle avatar-related arguments
-    if args.avatar_enabled is not None:
-        GLOBAL_AVATAR_ENABLED = args.avatar_enabled
-        logger.info(f"Avatar {'enabled' if GLOBAL_AVATAR_ENABLED else 'disabled'}")
-        
-    if args.avatar_model:
-        GLOBAL_AVATAR_MODEL = args.avatar_model
-        logger.info(f"Using avatar model: {GLOBAL_AVATAR_MODEL}")
-        
-    if args.avatar_style:
-        GLOBAL_AVATAR_STYLE = args.avatar_style
-        logger.info(f"Using avatar style: {GLOBAL_AVATAR_STYLE}")
-
-    # if args.temperature is not None: # Removed
-    #     GLOBAL_TEMPERATURE = args.temperature
-    #     logger.info(f"Using temperature: {GLOBAL_TEMPERATURE}")
-
-    # Filter custom args from sys.argv (update the list of flags to skip)
-    filtered_argv = [sys.argv[0]]
-    i = 1
-    while i < len(sys.argv):
-        arg = sys.argv[i]
-        # Updated list of flags to remove
-        if arg in ['--page-path', '--tts-model', '--avatar-enabled', '--avatar-model', '--avatar-style'] and i + 1 < len(sys.argv):
-            i += 2  # Skip both the flag and its value
-        else:
-            filtered_argv.append(arg)
-            i += 1
-
-    sys.argv = filtered_argv
-
-    # --- (Keep running the agent) ---
+    logger.info("Starting LiveKit Agent Worker...")
     agents.cli.run_app(
         agents.WorkerOptions(
-            entrypoint_fnc=entrypoint
+            entrypoint_fnc=entrypoint,
         )
     )
