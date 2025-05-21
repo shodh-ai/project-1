@@ -1,20 +1,24 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { nextFlowTask, FlowTask } from '@/api/pronityClient';
+import { useFlowControlStore } from '@/stores/flowControlStore';
 
 interface FlowNavigationProps {
   onCompleteTask?: () => void;
 }
 
 export default function FlowNavigation({ onCompleteTask }: FlowNavigationProps) {
+  console.log('FlowNavigation: Component rendering/re-rendering.');
   const router = useRouter();
   const [currentTask, setCurrentTask] = useState<FlowTask | null>(null);
   const [position, setPosition] = useState<number>(0);
   const [totalTasks, setTotalTasks] = useState<number>(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { nextTaskTrigger } = useFlowControlStore();
+  const lastTriggerRef = useRef<number>(0); // To keep track of the last processed trigger
 
   // Load flow task information from localStorage on component mount
   useEffect(() => {
@@ -39,9 +43,34 @@ export default function FlowNavigation({ onCompleteTask }: FlowNavigationProps) 
     }
   }, []);
 
-  const handleNextTask = async () => {
-    // Call onCompleteTask callback if provided
-    if (onCompleteTask) {
+  console.log('FlowNavigation: Value of nextTaskTrigger from store before useEffect:', nextTaskTrigger);
+  // Effect to listen to global next task requests from the Zustand store
+  useEffect(() => {
+    // Only trigger if nextTaskTrigger has a new positive value and hasn't been processed yet
+    if (nextTaskTrigger > 0 && nextTaskTrigger !== lastTriggerRef.current) {
+      console.log('FlowNavigation (Store Effect): Detected nextTaskTrigger change. Value:', nextTaskTrigger, 'Last processed trigger:', lastTriggerRef.current);
+      lastTriggerRef.current = nextTaskTrigger; // Mark this trigger value as processed
+      
+      // If onCompleteTask is provided, call it. This is for actions specific to the current page
+      // before transitioning away due to a global 'next' request.
+      if (onCompleteTask) {
+        console.log('FlowNavigation: Calling onCompleteTask due to store trigger.');
+        onCompleteTask();
+      }
+      
+      // Proceed to the next task, indicating it was triggered by the store
+      // so that handleNextTask itself doesn't call onCompleteTask again.
+      handleNextTask(true);
+    }
+  // nextTaskTrigger is the dependency. onCompleteTask and handleNextTask should be stable or memoized if they were dependencies.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nextTaskTrigger]);
+
+  const handleNextTask = async (isStoreTriggered: boolean = false) => {
+    // If this function call is from a direct button click (not from the store trigger)
+    // AND onCompleteTask is provided, then call it.
+    if (!isStoreTriggered && onCompleteTask) {
+      console.log('FlowNavigation: Calling onCompleteTask from direct button click.');
       onCompleteTask();
     }
 
@@ -147,7 +176,7 @@ export default function FlowNavigation({ onCompleteTask }: FlowNavigationProps) 
       {/* Navigation button */}
       <div className="flex justify-end">
         <button
-          onClick={handleNextTask}
+          onClick={() => handleNextTask(false)}
           disabled={loading}
           className={`px-4 py-2 ${loading ? 'bg-gray-400' : 'bg-blue-600 hover:bg-blue-700'} text-white rounded-md flex items-center`}
         >

@@ -8,6 +8,8 @@ import { getTokenEndpointUrl, tokenServiceConfig } from '@/config/services';
 import AgentTextInput from '@/components/ui/AgentTextInput';
 // Import other UI components if needed, e.g., Button from '@/components/ui/button';
 import StudentStatusDisplay from '@/components/StudentStatusDisplay';
+import { useFlowControlStore } from '@/stores/flowControlStore';
+import FlowNavigation from '@/components/FlowNavigation';
 
 export default function RoxPage() {
   const [token, setToken] = useState<string>('');
@@ -18,6 +20,7 @@ export default function RoxPage() {
   const roomRef = useRef<Room | null>(null);
   const [isStudentStatusDisplayOpen, setIsStudentStatusDisplayOpen] = useState(false);
   const docsIconRef = useRef<HTMLImageElement>(null);
+  const { requestNextTask } = useFlowControlStore();
 
   const roomName = 'Roxpage'; // Or dynamically set if needed
   const userName = 'TestUser'; // Or dynamically set if needed
@@ -160,13 +163,14 @@ export default function RoxPage() {
 
   return (
     <div className="flex h-screen bg-white text-gray-800 overflow-hidden bg-[image:radial-gradient(ellipse_at_top_right,_#B7C8F3_0%,_transparent_70%),_radial-gradient(ellipse_at_bottom_left,_#B7C8F3_0%,_transparent_70%)]">
+      <FlowNavigation />
       {/* Sidebar */}
       <aside className="w-20 p-4 flex flex-col items-center space-y-6">
         <Image src="/final-logo-1.png" alt="Logo" width={32} height={32} className="rounded-lg" />
         <div className="flex-grow flex flex-col items-center justify-center space-y-4">
           <Image src="/user.svg" alt="User Profile" width={24} height={24} className="cursor-pointer hover:opacity-75" />
           <Image src="/mic-on.svg" alt="Mic On" width={24} height={24} className="cursor-pointer hover:opacity-75" />
-          <Image src="/next.svg" alt="Next" width={24} height={24} className="cursor-pointer hover:opacity-75" />
+          <Image src="/next.svg" alt="Next" width={24} height={24} className="cursor-pointer hover:opacity-75" onClick={() => { console.log('RoxPage: Next icon clicked, calling requestNextTask...'); requestNextTask(); }} />
           <Image ref={docsIconRef} id="statusViewButton" src="/docs.svg" alt="Docs" width={24} height={24} className="cursor-pointer hover:opacity-75" onClick={toggleStudentStatusDisplay} />
         </div>
       </aside>
