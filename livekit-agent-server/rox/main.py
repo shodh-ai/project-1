@@ -168,7 +168,7 @@ async def entrypoint(ctx: agents.JobContext):
 
         if avatar_session: # This implies GLOBAL_AVATAR_ENABLED was true
             logger.info("Starting Tavus avatar session with agent_session and room...")
-            await avatar_session.start(agent_session=session, room=ctx.room)
+            await avatar_session.start(session, ctx.room)
             logger.info("Tavus avatar session started.")
         
         # Start the agent session
