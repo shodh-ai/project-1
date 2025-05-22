@@ -86,8 +86,7 @@ const AudioTracksLogger: React.FC = () => {
 
 // New component to log audio tracks for a single participant
 const ParticipantAudioLogger: React.FC<{ participant: RemoteParticipant }> = ({ participant }) => {
-  // Query audio tracks using both Source.Audio and Source.Unknown to catch all possible sources
-  const audioTracksFromAudio = useTracks([{ source: Track.Source.Audio, participant }]);
+  // Query audio tracks using both Source.Unknown to catch all possible sources
   const audioTracksFromUnknown = useTracks([{ source: Track.Source.Unknown, participant }]);
   const audioTracksFromMicrophone = useTracks([{ source: Track.Source.Microphone, participant }]);
   
@@ -99,19 +98,6 @@ const ParticipantAudioLogger: React.FC<{ participant: RemoteParticipant }> = ({ 
   );
 
   useEffect(() => {
-    console.log(
-      `LK Session Internal - ParticipantAudioLogger - Audio Tracks from Source.Audio for ${participant.identity}:`,
-      audioTracksFromAudio.map(ref => ({
-        sid: ref.publication?.trackSid,
-        subscribed: ref.publication?.isSubscribed,
-        muted: ref.publication?.isMuted,
-        kind: ref.publication?.kind,
-        source: ref.publication?.source,
-        trackName: ref.publication?.trackName,
-        isEnabled: ref.track?.isEnabled,
-      }))
-    );
-
     console.log(
       `LK Session Internal - ParticipantAudioLogger - Audio Tracks from Source.Unknown for ${participant.identity}:`,
       audioTracksFromUnknown.map(ref => ({
@@ -166,7 +152,7 @@ const ParticipantAudioLogger: React.FC<{ participant: RemoteParticipant }> = ({ 
         trackName: pub.trackName,
       }))
     );
-  }, [audioTracksFromAudio, audioTracksFromUnknown, audioTracksFromMicrophone, possibleAudioTracks, participant.identity, participant.name, participant.trackPublications]);
+  }, [audioTracksFromUnknown, audioTracksFromMicrophone, possibleAudioTracks, participant.identity, participant.name, participant.trackPublications]);
 
   return null; // This component is only for logging
 };
@@ -188,7 +174,7 @@ const LiveKitSessionInternal: React.FC<{ children: ReactNode; onDataReceived: (d
       console.log(`LK Session Internal: Monitoring participant ${participant.identity}`);
       participant.on(RoomEvent.TrackPublished, (trackPublication) => {
         console.log(`LK Session Internal: Track PUBLISHED for ${participant.identity}: ${trackPublication.source}, SID: ${trackPublication.trackSid}`);
-        if (trackPublication.source === Track.Source.Audio) {
+        if (trackPublication.source === Track.Source.Microphone) {
           console.log(`LK Session Internal: Audio track published by ${participant.identity}. Subscribing if not already.`);
           // Subscription usually happens automatically or is managed by RoomAudioRenderer
         }
@@ -352,7 +338,35 @@ const LiveKitSessionInternal: React.FC<{ children: ReactNode; onDataReceived: (d
       {/* Temporary Test Button */}
       <div style={{ position: 'absolute', top: '10px', left: '10px', zIndex: 1000 }}>
         <button 
-          onClick={() => handleExampleInteraction("test_button_click", { info: "Test interaction from LiveKitSessionInternal", timestamp: new Date().toISOString() })}
+          onClick={() => {
+          if (!sessionId) {
+            console.error('LK Session Internal - Test Button: Session ID is not available. Cannot send interaction.');
+            return;
+          }
+
+          const testCurrentContext: CurrentContext = {
+            user_id: "frontend_test_user_007",
+            toefl_section: "Speaking",
+            question_type: "Q2_Campus_Situation_Test_Button",
+            task_stage: "testing_specific_context_from_button",
+            current_prompt_id: "BTN_PROMPT_456",
+            ui_element_in_focus: "test_interaction_button_v2",
+            timer_value_seconds: 90,
+            selected_tools_or_options: { "source": "test_button_direct_send", "version": 2 },
+            // Ensure all fields expected by your CurrentContext type or backend Pydantic model are considered.
+            // Add any other fields from useAppContext().currentContext if they should be part of the base
+            // and are not explicitly overridden here. For a clean test, defining all is best.
+          };
+
+          const interactionDataForBackend: InteractionContextPayload = {
+            current_context: testCurrentContext,
+            session_id: sessionId,
+            transcript_if_relevant: null, // No transcript for this button click test
+          };
+          
+          console.log("LK Session Internal - Test Button: Sending specific test interaction data:", JSON.stringify(interactionDataForBackend, null, 2));
+          sendInteractionDataToAgent(interactionDataForBackend);
+        }}
           style={{ padding: '8px 12px', backgroundColor: 'lightgreen', border: '1px solid green', borderRadius: '4px', cursor: 'pointer' }}
         >
           Test Interaction
