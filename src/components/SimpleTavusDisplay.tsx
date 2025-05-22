@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { Track, Room, RoomEvent } from 'livekit-client';
+import { useRoomContext } from '@livekit/components-react';
 import { 
   useTracks, 
   useParticipants, 
@@ -10,10 +11,17 @@ import {
 } from '@livekit/components-react';
 
 interface SimpleTavusDisplayProps {
-  room: Room;
+  // Room is now obtained from context
 }
 
-export default function SimpleTavusDisplay({ room }: SimpleTavusDisplayProps) {
+const SimpleTavusDisplay: React.FC<SimpleTavusDisplayProps> = () => {
+  const room = useRoomContext();
+
+  if (!room) {
+    console.warn('SimpleTavusDisplay: Room object not found in context. Ensure this component is a child of LiveKitRoom or a component using useLiveKitRoom.');
+    return <p>Error: Room context not available.</p>; // Or null, or some other placeholder
+  }
+
   const [micInitialized, setMicInitialized] = useState(false);
   const [micActive, setMicActive] = useState(false);
   const [micError, setMicError] = useState<string | null>(null);
@@ -396,3 +404,5 @@ function TavusRenderer() {
     </div>
   );
 }
+
+export default SimpleTavusDisplay;

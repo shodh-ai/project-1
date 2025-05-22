@@ -260,7 +260,7 @@ async def entrypoint(ctx: agents.JobContext):
                 logger.info(f"Available avatar methods: {avatar_methods}")
                 
                 # Inspect room details before avatar start
-                logger.info(f"Room details before avatar start: name={ctx.room.name}, sid={ctx.room.sid}")
+                logger.info(f"Room details before avatar start: name={ctx.room.name}, sid={await ctx.room.sid()}")
                 
                 # Ensure the avatar joins the room and publishes its video track
                 logger.info("Calling avatar_session.start()...")

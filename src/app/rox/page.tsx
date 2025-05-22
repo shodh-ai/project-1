@@ -1,9 +1,11 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import Image from 'next/image';
-import { Room, RoomEvent, RemoteParticipant, DataPacket_Kind } from 'livekit-client';
+import { RemoteParticipant, DataPacket_Kind } from 'livekit-client'; // Room and RoomEvent are no longer directly used here
 import SimpleTavusDisplay from '@/components/SimpleTavusDisplay';
+import { LiveKitSession } from '@/components/LiveKitSession'; // Import LiveKitSession
+import { useAppContext } from '@/contexts/Appcontext'; // To check session status
 import { getTokenEndpointUrl, tokenServiceConfig } from '@/config/services';
 import AgentTextInput from '@/components/ui/AgentTextInput';
 // Import other UI components if needed, e.g., Button from '@/components/ui/button';
@@ -11,11 +13,11 @@ import StudentStatusDisplay from '@/components/StudentStatusDisplay';
 
 export default function RoxPage() {
   const [token, setToken] = useState<string>('');
-  const [room, setRoom] = useState<Room | null>(null);
-  const [isConnected, setIsConnected] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // const [room, setRoom] = useState<Room | null>(null); // Managed by LiveKitSession
+  // const [isConnected, setIsConnected] = useState(false); // Derived from AppContext or LiveKitSession state
+  const [pageError, setPageError] = useState<string | null>(null); // Renamed to avoid conflict if LiveKitSession exposes 'error'
   const [userInput, setUserInput] = useState('');
-  const roomRef = useRef<Room | null>(null);
+  // const roomRef = useRef<Room | null>(null); // LiveKitSession manages its room instance
   const [isStudentStatusDisplayOpen, setIsStudentStatusDisplayOpen] = useState(false);
   const docsIconRef = useRef<HTMLImageElement>(null);
 
@@ -36,110 +38,70 @@ export default function RoxPage() {
         if (data.token) setToken(data.token);
         else throw new Error('No token in response');
       } catch (err) {
-        setError((err as Error).message);
+        setPageError((err as Error).message);
       }
     };
     fetchToken();
   }, [roomName, userName]);
 
-  useEffect(() => {
-    if (!token || room) return; // Don't connect if no token or already connected/connecting
+  // This useEffect for manual connection is now handled by LiveKitSession
+  // useEffect(() => { ...manual connection logic... }, [token]);
 
-    const connect = async () => {
-      const newRoomInstance = new Room();
-      
-      newRoomInstance.on(RoomEvent.Connected, () => {
-        console.log('Connected to LiveKit room:', newRoomInstance.name);
-        setIsConnected(true);
-        setRoom(newRoomInstance); // Update state for rendering
-        roomRef.current = newRoomInstance; // Store in ref for cleanup
-      });
 
-      newRoomInstance.on(RoomEvent.DataReceived, (payload: Uint8Array, participant?: RemoteParticipant, kind?: DataPacket_Kind, topic?: string) => {
-        if (participant) {
-          console.log(`Received data from participant ${participant.identity} (kind: ${kind}, topic: ${topic})`);
+  const toggleStudentStatusDisplay = () => {
+    setIsStudentStatusDisplayOpen(!isStudentStatusDisplayOpen);
+  };
+
+  const handleDataReceivedFromLiveKitSession = useCallback((message: any) => { // Expecting already parsed JSON
+    // Logic from the old newRoomInstance.on(RoomEvent.DataReceived, ...) is now adapted for parsed message
+    // The 'participant', 'kind', 'topic' are no longer directly passed here as LiveKitSession handles the raw event.
+    // If needed, LiveKitSession could be modified to pass along participant identity if it's crucial for rox/page.tsx logic.
+    console.log('RoxPage: Received parsed message via LiveKitSession:', message);
+    try {
+        // DOM Action processing logic
+        if (message?.delta?.metadata?.dom_actions) {
+          const domActionsStr = message.delta.metadata.dom_actions;
           try {
-            const messageStr = new TextDecoder().decode(payload);
-            const message = JSON.parse(messageStr);
-            console.log('Decoded message:', message);
-
-            // Check for chat messages with metadata carrying dom_actions
-            // The structure might depend on how CustomLLMBridge wraps it.
-            // Assuming it's a ChatChunk-like structure or similar.
-            if (message?.delta?.metadata?.dom_actions) {
-              const domActionsStr = message.delta.metadata.dom_actions;
-              try {
-                const domActions = JSON.parse(domActionsStr);
-                if (Array.isArray(domActions)) {
-                  domActions.forEach((actionItem: any) => {
-                    console.log('Processing DOM action from metadata:', actionItem);
-                    if (actionItem.action === 'click' && actionItem.payload?.selector === '#statusViewButton') {
-                      console.log('Agent requested to toggle StudentStatusDisplay via #statusViewButton selector from metadata');
-                      toggleStudentStatusDisplay();
-                    } else if (actionItem.action === 'click' && actionItem.payload?.selector) {
-                      console.log(`Agent requested click on other selector from metadata: ${actionItem.payload.selector}`);
-                      // Potentially handle other selectors if needed in the future, e.g., #startLearningButton
-                    }
-                  });
-                }
-              } catch (e) {
-                console.error('Failed to parse dom_actions from metadata:', e);
-              }
-            }
-            // Fallback: Check for simpler action/payload structure directly if CustomLLMBridge might send it this way.
-            // This is based on rox_agent.py returning dom_actions directly in its JSON response.
-            // CustomLLMBridge might pick this up and send it without the delta/metadata wrapper in some configurations.
-            else if (message?.dom_actions && Array.isArray(message.dom_actions)) {
-                message.dom_actions.forEach((actionItem: any) => {
-                  console.log('Processing DOM action from direct message property:', actionItem);
+            const domActions = JSON.parse(domActionsStr);
+            if (Array.isArray(domActions)) {
+              domActions.forEach((actionItem: any) => { // Added type for actionItem
+                try { // Inner try-catch for individual action processing
                   if (actionItem.action === 'click' && actionItem.payload?.selector === '#statusViewButton') {
-                    console.log('Agent requested to toggle StudentStatusDisplay via #statusViewButton selector from direct message property');
+                    console.log('RoxPage: Agent requested to toggle StudentStatusDisplay via #statusViewButton selector from metadata');
                     toggleStudentStatusDisplay();
+                  } else if (actionItem.action === 'click' && actionItem.payload?.selector) {
+                    const targetElement = document.querySelector(actionItem.payload.selector);
+                    if (targetElement && typeof (targetElement as HTMLElement).click === 'function') {
+                      console.log(`RoxPage: Agent requested click on element: ${actionItem.payload.selector}`);
+                      (targetElement as HTMLElement).click();
+                    } else {
+                      console.warn(`RoxPage: DOM Action - Element not found or not clickable for selector: ${actionItem.payload.selector}`);
+                    }
                   }
-                });
+                  // Add more 'else if' blocks for other actions like 'type', 'scroll', etc.
+                } catch (actionError) {
+                  console.error('RoxPage: Error processing individual DOM action:', actionItem, actionError);
+                }
+              });
+            } else {
+              console.warn('RoxPage: dom_actions from metadata is not an array:', domActions);
             }
-            // Further fallback for direct action/payload if it's a single action not in an array
-            else if (message?.action === 'click' && message?.payload?.selector === '#statusViewButton') {
-              console.log('Agent requested to toggle StudentStatusDisplay via #statusViewButton selector from single direct action');
-              toggleStudentStatusDisplay();
-            }
-
-          } catch (e) {
-            console.error('Failed to parse data packet:', e);
+          } catch (jsonParseError) {
+            console.error('RoxPage: Failed to parse dom_actions JSON string from metadata:', domActionsStr, jsonParseError);
           }
+        } else {
+          // console.log('RoxPage: No dom_actions found in message metadata or message structure is different.');
         }
-      });
 
-      newRoomInstance.on(RoomEvent.Disconnected, () => {
-        console.log('Disconnected from LiveKit room');
-        setIsConnected(false);
-        setRoom(null);
-        if (roomRef.current === newRoomInstance) {
-          roomRef.current = null;
-        }
-      });
+      // Handle other message types or properties from the parsed 'message' object
+      // For instance, if the message contains text to display:
+      // if (message?.text_content) { setAgentResponse(message.text_content); }
 
-      try {
-        await newRoomInstance.connect(process.env.NEXT_PUBLIC_LIVEKIT_URL || '', token, {
-          autoSubscribe: true, // Automatically subscribe to all tracks
-        });
-      } catch (err) {
-        setError(`Failed to connect: ${(err as Error).message}`);
-        setRoom(null); // Ensure state room is null on failed connection
-        roomRef.current = null; // Ensure ref is also null
-      }
-    };
-
-    if (token && !roomRef.current) { // Only connect if token exists and not already connected/connecting
-      connect();
+    } catch (error) {
+      console.error('RoxPage: Error processing received message in LiveKitSession callback:', error);
     }
+  }, [toggleStudentStatusDisplay]); // Added toggleStudentStatusDisplay to dependency array // Add dependencies if toggleStudentStatusDisplay or other external functions are used and not stable
 
-    return () => {
-      console.log('Cleaning up LiveKit room connection');
-      roomRef.current?.disconnect();
-      roomRef.current = null; // Clear the ref on cleanup
-    };
-  }, [token]); // Effect dependencies
 
   const handleSendMessageToAgent = () => {
     if (userInput.trim()) {
@@ -149,15 +111,9 @@ export default function RoxPage() {
     }
   };
 
-  const handleDisconnect = () => {
-    roomRef.current?.disconnect(); // Use ref for manual disconnect as well
-    // State will update via RoomEvent.Disconnected listener
-  };
-
-  const toggleStudentStatusDisplay = () => {
-    setIsStudentStatusDisplayOpen(!isStudentStatusDisplayOpen);
-  };
-
+  // const handleDisconnect = () => { // LiveKitSession handles its own disconnect lifecycle
+  //   // If you need an explicit disconnect button, LiveKitSession would need to expose a disconnect function
+  // };
   return (
     <div className="flex h-screen bg-white text-gray-800 overflow-hidden bg-[image:radial-gradient(ellipse_at_top_right,_#B7C8F3_0%,_transparent_70%),_radial-gradient(ellipse_at_bottom_left,_#B7C8F3_0%,_transparent_70%)]">
       {/* Sidebar */}
@@ -174,15 +130,27 @@ export default function RoxPage() {
       {/* Main Content */}
       <main className="flex-1 flex flex-col items-center justify-center p-8 relative">
         {/* Avatar Display - Centered */} 
-        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2" style={{ top: '30%' }}>
-            {isConnected && room ? (
-                <SimpleTavusDisplay room={room} />
+        {/* LiveKitSession will be rendered here, it handles its own display or provides context for SimpleTavusDisplay */}
+        <LiveKitSession 
+            token={token} 
+            serverUrl={process.env.NEXT_PUBLIC_LIVEKIT_URL || ''} 
+            onDataReceived={handleDataReceivedFromLiveKitSession} 
+        >
+            {/* Render SimpleTavusDisplay as a child. It should pick up context from LiveKitSession/LiveKitRoom. */}
+            { useAppContext().sessionId ? (
+                <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2" style={{ top: '30%' }}>
+                    {/* SimpleTavusDisplay no longer needs 'room' prop if it uses LiveKit hooks like useRoomContext() */}
+                    <SimpleTavusDisplay /> 
+                </div>
             ) : (
-                <div className="w-40 h-40 bg-slate-200 rounded-full flex items-center justify-center text-gray-700">
-                    <p className="text-sm">{error ? 'Error' : (token ? 'Connecting...' : 'No Token')}</p>
+                <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2" style={{ top: '30%' }}>
+                    <div className="w-40 h-40 bg-slate-200 rounded-full flex items-center justify-center text-gray-700">
+                        <p className="text-sm">{pageError ? `Error: ${pageError}` : (token ? 'Initializing Session...' : 'No Token')}</p>
+                    </div>
                 </div>
             )}
-        </div>
+        </LiveKitSession>
+
 
         <div className="w-full max-w-3xl absolute bottom-0 mb-12 flex flex-col items-center">
             <p className="text-xl mb-6 text-gray-600" style={{ marginTop: '100px' }}>Hello, I am Rox, your AI Assistant!</p>
@@ -208,22 +176,6 @@ export default function RoxPage() {
               ))}
             </div>
         </div>
-
-        {/* Error display - optional, can be placed elsewhere */}
-        {error && (
-          <div className="absolute top-4 right-4 p-3 bg-red-500 text-white rounded-md shadow-lg">
-            Error: {error}
-          </div>
-        )}
-        {/* Disconnect button - optional, can be placed elsewhere or removed */}
-        {isConnected && (
-             <button 
-              onClick={handleDisconnect}
-              className="absolute top-4 left-4 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded"
-            >
-              Disconnect
-            </button>
-        )}
 
         <StudentStatusDisplay 
           isOpen={isStudentStatusDisplayOpen} 

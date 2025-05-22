@@ -14,6 +14,8 @@ import asyncio
 from pathlib import Path
 from dotenv import load_dotenv
 import json
+import aiohttp
+import urllib.parse
 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -29,7 +31,10 @@ try:
     from livekit.plugins.tavus import AvatarSession as TavusAvatarPlugin # Changed to Tavus
 except ImportError as e:
     logger.error(f"Failed to import required packages: {e}")
-    logger.error("Please install the missing packages: pip install 'livekit-agents[deepgram,silero,turn-detector]~=1.0' 'livekit-plugins-noise-cancellation~=0.2' python-dotenv aiohttp")
+    error_message = "Please ensure all dependencies are installed. Standard packages: pip install 'livekit-agents[deepgram,silero,turn-detector]~=1.0' 'livekit-plugins-noise-cancellation~=0.2' python-dotenv aiohttp."
+    if "tavus" in str(e).lower():
+        error_message += "\nFor the Tavus plugin, ensure you have run: python3 install_tavus.py (from the 'livekit-agent-server' directory)."
+    logger.error(error_message)
     sys.exit(1)
 
 try:
@@ -47,7 +52,12 @@ else:
     logger.warning(f"No .env file found at {env_path}, using environment variables from system")
     load_dotenv()
 
-required_vars = ["LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "DEEPGRAM_API_KEY", "MY_CUSTOM_AGENT_URL"]
+# URL for the external token service (e.g., http://localhost:3000)
+TOKEN_SERVICE_URL_ENV = "TOKEN_SERVICE_URL"
+
+required_vars = ["LIVEKIT_URL", "DEEPGRAM_API_KEY", "MY_CUSTOM_AGENT_URL", TOKEN_SERVICE_URL_ENV]
+# LIVEKIT_API_KEY and LIVEKIT_API_SECRET are no longer directly used by this script for connection
+# but are essential for the token service itself.
 AVATAR_SERVICE_URL = os.getenv("AVATAR_SERVICE_URL", "https://avatar.livekit.io")
 AVATAR_API_KEY = os.getenv("AVATAR_API_KEY", "")
 
@@ -76,16 +86,72 @@ class Assistant(Agent):
         """Override to log when assistant replies"""
         logger.info(f"ASSISTANT REPLIED (room: {self.ctx.room.name}, job: {self.ctx.job.id}): '{message[:100]}...' (audio_url: {audio_url})")
 
+async def fetch_livekit_token(room_name: str, agent_identity: str, token_service_base_url: str) -> tuple[str, str | None]:
+    """Fetches a LiveKit token from the custom token service."""
+    if not token_service_base_url:
+        logger.error("Token service URL is not configured (missing TOKEN_SERVICE_URL env var).")
+        raise ValueError("Token service URL is not configured.")
+
+    params = {"room": room_name, "username": agent_identity}
+    encoded_params = urllib.parse.urlencode(params)
+    # Ensure the base URL doesn't have a trailing slash if /api/token always starts with one
+    request_url = f"{token_service_base_url.rstrip('/')}/api/token?{encoded_params}"
+
+    logger.info(f"Fetching LiveKit token for room '{room_name}', identity '{agent_identity}' from {request_url}")
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(request_url) as response:
+                if response.status == 404:
+                    logger.error(f"Token service endpoint not found (404) at {request_url}. Ensure the service is running and URL is correct.")
+                response.raise_for_status()  # Raises an exception for 4XX/5XX responses
+                data = await response.json()
+                if "token" not in data:
+                    logger.error(f"'token' field not found in response from token service at {request_url}. Response: {data}")
+                    raise ValueError("Token not found in response from token service")
+                ws_url = data.get("wsUrl")
+                logger.info(f"Successfully fetched token. wsUrl from service response: {ws_url}")
+                return data["token"], ws_url
+    except aiohttp.ClientConnectorError as e:
+        logger.error(f"Connection error fetching token from {request_url}: {e}. Ensure token service is running and accessible.")
+        raise
+    except aiohttp.ClientResponseError as e:
+        logger.error(f"HTTP error {e.status} fetching token from {request_url}: {e.message}")
+        try:
+            error_details = await e.text()
+            logger.error(f"Token service error details: {error_details}")
+        except Exception:
+            pass # Ignore if can't get error details
+        raise
+    except Exception as e:
+        logger.error(f"Generic error fetching or parsing token from {request_url}: {e}")
+        raise
+
 async def entrypoint(ctx: agents.JobContext):
     """Main entrypoint for the agent, configured by job metadata."""
     logger.info(f"Agent job {ctx.job.id} received for room: {ctx.room.name}")
     logger.debug(f"Raw Job metadata from ctx.job.metadata: {ctx.job.metadata}")
 
+    # ---- START MODIFICATION FOR LOCAL TESTING ----
+    job_metadata_str = ctx.job.metadata
+    # If no metadata from context and LOCAL_TEST_METADATA_FILE env var is set, try to load it
+    if not job_metadata_str and os.getenv("LOCAL_TEST_METADATA_FILE"):
+        local_metadata_file_path = os.getenv("LOCAL_TEST_METADATA_FILE")
+        logger.info(f"Attempting to load local test metadata from: {local_metadata_file_path}")
+        try:
+            with open(local_metadata_file_path, "r") as f:
+                job_metadata_str = f.read()
+            logger.info(f"Successfully loaded local test metadata.")
+        except FileNotFoundError:
+            logger.error(f"Local test metadata file not found: {local_metadata_file_path}")
+        except Exception as e:
+            logger.error(f"Error loading local test metadata from {local_metadata_file_path}: {e}")
+    # ---- END MODIFICATION FOR LOCAL TESTING ----
+
     parsed_metadata = {}
-    if ctx.job.metadata:
-        if isinstance(ctx.job.metadata, str) and ctx.job.metadata.strip(): # If it's a non-empty string
+    if job_metadata_str: # Now use job_metadata_str which might have come from file or ctx
+        if isinstance(job_metadata_str, str) and job_metadata_str.strip(): # If it's a non-empty string
             try:
-                parsed_metadata = json.loads(ctx.job.metadata)
+                parsed_metadata = json.loads(job_metadata_str)
                 if not isinstance(parsed_metadata, dict):
                     logger.warning(f"Metadata parsed from string but is not a dictionary (type: {type(parsed_metadata)}). Value: '{ctx.job.metadata}'. Defaulting to empty dict.")
                     parsed_metadata = {}
@@ -129,15 +195,18 @@ async def entrypoint(ctx: agents.JobContext):
 
     stt = deepgram.STT(
         language=deepgram_language,
-        detect_language=True,
+        detect_language=False, # Explicitly disable language detection for streaming
         interim_results=stt_interim_results,
         smart_format=True,
         model=deepgram_model,
     )
     logger.info(f"STT (Deepgram) initialized with model: {deepgram_model}, language: {deepgram_language}")
 
-    tts = silero.TTS(model_name=tts_model_name)
-    logger.info(f"TTS (Silero) initialized with model: {tts_model_name}")
+    # tts_model_name from metadata was for Silero. We'll use a default Deepgram model for now.
+    # You can make this configurable via metadata again if needed.
+    deepgram_tts_model = parsed_metadata.get("deepgram_tts_model", "aura-asteria-en") 
+    tts = deepgram.TTS(model=deepgram_tts_model) 
+    logger.info(f"TTS (Deepgram) initialized with model: {deepgram_tts_model}")
 
     llm_bridge = CustomLLMBridge(
         agent_url=custom_agent_url,
@@ -160,37 +229,77 @@ async def entrypoint(ctx: agents.JobContext):
     assistant_instance = Assistant(llm_bridge=llm_bridge, instructions=initial_instructions)
 
     try:
-        logger.info("Creating agent session...")
+        room_input_options = RoomInputOptions()
+
+        token_service_base_url = os.getenv(TOKEN_SERVICE_URL_ENV)
+        if not token_service_base_url:
+            logger.critical(f"Required environment variable {TOKEN_SERVICE_URL_ENV} is not set. Cannot fetch token.")
+            # Worker will exit due to missing required var earlier, but defensive check here.
+            raise ValueError(f"{TOKEN_SERVICE_URL_ENV} not set.")
+
+        agent_identity = f"agent-py-{ctx.job.id[:12]}" # Create a unique agent identity
+        logger.info(f"Agent identity for token: {agent_identity}")
+
+        livekit_token, livekit_ws_url = await fetch_livekit_token(ctx.room.name, agent_identity, token_service_base_url)
+
+        logger.info("Successfully fetched token. wsUrl from service response: %s", livekit_ws_url)
+
+        # Set environment variables for LiveKit SDK to use for this connection attempt
+        os.environ["LIVEKIT_TOKEN"] = livekit_token
+        
+        final_connect_url_for_this_session = livekit_ws_url # URL from token service
+        if not final_connect_url_for_this_session:
+            final_connect_url_for_this_session = os.getenv("LIVEKIT_URL") # Fallback to .env provided at agent startup
+            logger.info(f"wsUrl from token service is empty. Using LIVEKIT_URL from environment for this session: {final_connect_url_for_this_session}")
+        else:
+            logger.info(f"Using wsUrl from token service for this session: {final_connect_url_for_this_session}. This will override LIVEKIT_URL from .env for this connection attempt.")
+        
+        if not final_connect_url_for_this_session:
+            logger.error("LIVEKIT_URL for connection is not determined (neither from token service nor .env). Cannot connect.")
+            # Unsetting token not strictly necessary as job will likely terminate, but good practice if we were to continue.
+            # del os.environ["LIVEKIT_TOKEN"]
+            raise ValueError("LIVEKIT_URL for connection is not determined.")
+        
+        os.environ["LIVEKIT_URL"] = final_connect_url_for_this_session # Set the determined URL for ctx.connect()
+
+        logger.info(f"Attempting to connect to room: {ctx.room.name} using fetched token and URL {final_connect_url_for_this_session} (via environment variables).")
+        room = await ctx.connect() # SDK will pick up LIVEKIT_URL and LIVEKIT_TOKEN from os.environ set above
+        if room is None:
+            logger.error(f"Failed to connect to LiveKit room '{ctx.room.name}' using token and URL '{final_connect_url_for_this_session}' (set via env vars). ctx.connect() returned None.")
+            # Further investigation might be needed if token is fetched but connection still fails (e.g., token invalid, server issues)
+            raise ConnectionError(f"Failed to establish connection to LiveKit room '{ctx.room.name}' using token and URL '{final_connect_url_for_this_session}' (set via env vars).")
+        logger.info(f"Successfully connected to room: {room.name} (SID: {room.sid}) using fetched token.")
+
+        logger.info("Creating agent session with options: {room_input_options}...")
         session = AgentSession(
-            room=ctx.room,
-            agent=assistant_instance,
             stt=stt,
             tts=tts,
-            llm=llm_bridge,
-            vad=agents.vad.SileroVad(),
+            llm=llm_bridge, # llm_bridge is the CustomLLMBridge instance
+            vad=silero.VAD.load(),
             turn_detection=MultilingualModel()
-            # avatar argument removed from AgentSession constructor as per memory
         )
         logger.info("Agent session created successfully")
 
         if avatar_plugin_instance: # If TavusAvatarPlugin was initialized
             logger.info("Starting Tavus Avatar plugin session...")
-            # Call start() on the TavusAvatarPlugin instance as per MEMORY[6dd07351-1d2c-4151-b8d4-b16c50c75592]
-            await avatar_plugin_instance.start(agent_session=session, room=ctx.room)
+            # Call start() on the TavusAvatarPlugin instance, using the connected 'room' object
+            await avatar_plugin_instance.start(agent_session=session, room=room)
             logger.info("Tavus Avatar plugin session started.")
 
         logger.info("Starting agent session...")
+        # Pass the 'agent' (assistant_instance) and the connected 'room' object to session.start()
         await session.start(
-            room_input_options=RoomInputOptions(
-                noise_cancellation=noise_cancellation.BVC(),
-            ),
+            agent=assistant_instance,
+            room=room,
+            room_input_options=room_input_options # Pass RoomInputOptions here
         )
         logger.info("Agent session started successfully")
 
         if initial_instructions and initial_instructions.strip() != "":
             logger.info(f"Attempting to send initial instructions as first utterance: '{initial_instructions[:100]}...'")
             try:
-                await assistant_instance.say(initial_instructions, allow_interruptions=False)
+                # Use session.say() instead of assistant_instance.say(), and pass 'text' as a keyword argument
+                await session.say(text=initial_instructions, allow_interruptions=False)
                 logger.info("Initial instructions sent as a statement by the agent.")
             except Exception as e:
                 logger.error(f"Failed to send initial instructions via agent.say: {e}")

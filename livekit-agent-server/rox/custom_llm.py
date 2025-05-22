@@ -4,7 +4,10 @@ import os
 import json
 import logging
 import aiohttp # Required for async HTTP requests: pip install aiohttp
-from typing import AsyncIterable, Optional
+from typing import AsyncIterable, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .main import RoxAgent # Import RoxAgent for type hinting to avoid circular dependency
 from contextlib import asynccontextmanager
 
 from livekit.agents.llm import LLM, ChatContext, ChatMessage, ChatRole, ChatChunk, ChoiceDelta
@@ -20,12 +23,20 @@ class CustomLLMBridge(LLM):
     """
     A custom LLM component that bridges to an external backend script/service.
     """
-    def __init__(self, url: str = MY_CUSTOM_AGENT_URL):
+    def __init__(self, 
+                 agent_url: str = MY_CUSTOM_AGENT_URL, 
+                 page_name: Optional[str] = None, 
+                 rox_agent_ref: Optional['RoxAgent'] = None): # Add rox_agent_ref
         super().__init__()
-        if not url:
+        if not agent_url:
             raise ValueError("External agent URL cannot be empty. Set MY_CUSTOM_AGENT_URL environment variable.")
-        self._url = url
-        logger.info(f"CustomLLMBridge initialized. Will send requests to: {self._url}")
+        self._agent_url = agent_url
+        self._page_name = page_name # Store page_name, though not currently used by the bridge logic
+        self._rox_agent_ref = rox_agent_ref # Store the RoxAgent reference
+        if self._rox_agent_ref:
+            logger.info(f"CustomLLMBridge initialized with RoxAgent reference. Will send requests to: {self._agent_url} for page: {self._page_name}")
+        else:
+            logger.warning(f"CustomLLMBridge initialized WITHOUT RoxAgent reference. Context data will not be available. Will send requests to: {self._agent_url} for page: {self._page_name}")
 
     def chat(self, *, chat_ctx: ChatContext = None, tools = None, tool_choice = None):
         """
@@ -160,7 +171,7 @@ class CustomLLMBridge(LLM):
                     logger.error(f"Error extracting content from user message: {e}")
                     transcript = "[Error: Could not extract transcript]"
                 
-                logger.info(f"Sending transcript to external agent at {self._url}: '{transcript}'")
+                logger.info(f"Sending transcript to external agent at {self._agent_url}: '{transcript}' for page: {self._page_name}")
                 # Add more verbosity to help debug
                 logger.debug(f"User message object: {user_message}")
                 logger.debug(f"User message type: {type(user_message)}")
@@ -169,10 +180,32 @@ class CustomLLMBridge(LLM):
                 dom_actions = None
                 
                 try:
+                    # Prepare payload
+                    payload = {"transcript": transcript}
+
+                    # Retrieve and add context from RoxAgent if available
+                    student_context = None
+                    session_id_from_context = None
+                    if self._rox_agent_ref:
+                        logger.debug(f"CustomLLMBridge: RoxAgent available. Accessing latest context. RoxAgent instance: {self._rox_agent_ref}")
+                        logger.debug(f"CustomLLMBridge: Current _latest_student_context from RoxAgent: {getattr(self._rox_agent_ref, '_latest_student_context', 'NOT_FOUND')}")
+                        logger.debug(f"CustomLLMBridge: Current _latest_session_id from RoxAgent: {getattr(self._rox_agent_ref, '_latest_session_id', 'NOT_FOUND')}")
+                        student_context = self._rox_agent_ref._latest_student_context
+                        session_id_from_context = self._rox_agent_ref._latest_session_id
+                        if student_context:
+                            payload['current_context'] = student_context # Use 'current_context' key
+                            logger.info(f"CustomLLMBridge: Added current_context to payload.")
+                        if session_id_from_context:
+                            payload['session_id'] = session_id_from_context
+                            logger.info(f"CustomLLMBridge: Added session_id to payload.")
+                    else:
+                        logger.warning("CustomLLMBridge: No RoxAgent reference, cannot add context to payload.")
+
+                    logger.info(f"CustomLLMBridge: Preparing to send payload to {self._agent_url}: {json.dumps(payload, indent=2)}")
+
                     # Use aiohttp for async HTTP requests
                     async with aiohttp.ClientSession() as session:
-                        payload = {"transcript": transcript} # Send transcript as JSON
-                        async with session.post(self._url, json=payload) as response:
+                        async with session.post(self._agent_url, json=payload) as response:
                             response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
                             result = await response.json() # Expecting JSON back, e.g., {"response": "..."}
                             response_text = result.get("response", "") # Extract the response text
@@ -197,7 +230,7 @@ class CustomLLMBridge(LLM):
                             logger.info(f"Received response from external agent: '{response_text}'")
 
                 except aiohttp.ClientError as e:
-                    logger.error(f"Error communicating with external agent at {self._url}: {e}")
+                    logger.error(f"Error communicating with external agent at {self._agent_url}: {e}")
                     response_text = "Sorry, I encountered an error trying to process your request." # Error message
                 except Exception as e:
                     logger.error(f"An unexpected error occurred in CustomLLMBridge: {e}")

@@ -1,414 +1,416 @@
 'use client';
 
+import React, { useEffect, ReactNode } from 'react';
+import { DataPacket_Kind, RemoteParticipant, ConnectionState, Room as LiveKitRoomType, LocalParticipant, RoomEvent, Track, TrackPublication } from 'livekit-client';
 import {
-  RoomContext,
-  useLocalParticipant,
-  RoomAudioRenderer
+    LiveKitRoom,
+    useLocalParticipant,
+    useRoomContext,
+    useConnectionState,
+    RoomAudioRenderer,
+    useRemoteParticipants,
+    useTracks
 } from '@livekit/components-react';
-import { Room, Track } from 'livekit-client';
-import { useEffect, useState, useCallback } from 'react';
-import AgentController from '@/components/AgentController';
-import CustomControls from '@/components/CustomControls';
-import LiveKitSessionUI from '@/components/LiveKitSessionUI';
-import { getTokenEndpointUrl, tokenServiceConfig } from '@/config/services';
-import '@livekit/components-styles';
-import '@/app/speakingpage/figma-styles.css';
-import '@/styles/figma-exact.css';
-import '@/styles/enhanced-room.css';
-import '@/styles/video-controls.css';
-import '@/styles/livekit-session-ui.css';
-
-import { PageType } from '@/components/LiveKitSessionUI';
+import { useAppContext } from '@/contexts/Appcontext'; // Corrected casing based on memory
+import { InteractionContextPayload, FrontendDataChannelMessage, CurrentContext } from '@/types/contentTypes'; // Import necessary types
 
 interface LiveKitSessionProps {
-  roomName: string;
-  userName: string;
-  questionText?: string;
-  sessionTitle?: string;
-  onLeave?: () => void;
-  pageType?: PageType;
-  showTimer?: boolean;
-  timerDuration?: number;
-  customControls?: React.ReactNode;
-  hideVideo?: boolean;
-  hideAudio?: boolean;
-  aiAssistantEnabled?: boolean;
-  showAvatar?: boolean;
-  // New prop for passing the room instance to parent (if needed)
-  onRoomCreated?: (room: Room) => void;
+  token: string;
+  serverUrl: string;
+  onDataReceived: (data: any) => void; // Callback for data packets from rox/page.tsx
+  children: ReactNode;
 }
 
-export default function LiveKitSession({
-  roomName,
-  userName,
-  questionText,
-  sessionTitle = "LiveKit Session",
-  onLeave,
-  pageType = 'default',
-  showTimer = false,
-  timerDuration = 45,
-  customControls,
-  hideVideo = false,
-  hideAudio = false,
-  aiAssistantEnabled = true,
-  showAvatar = false,
-  onRoomCreated
-}: LiveKitSessionProps) {
-  const [token, setToken] = useState('');
-  const [audioInitialized, setAudioInitialized] = useState<boolean>(false);
-  const [audioEnabled, setAudioEnabled] = useState<boolean>(false);
-  const [videoEnabled, setVideoEnabled] = useState<boolean>(!hideVideo);
-  const [audioContext, setAudioContext] = useState<AudioContext | null>(null);
-  const [micHeartbeat, setMicHeartbeat] = useState<NodeJS.Timeout | null>(null);
-  const [roomInstance] = useState(() => new Room({
-    // Optimize video quality for the user's screen
-    adaptiveStream: true,
-    // Enable automatic quality optimization
-    dynacast: true,
-    // Disable simulcast for better compatibility with avatars
-    // Setting higher default video quality
-    videoCaptureDefaults: {
-      resolution: { width: 640, height: 480, frameRate: 30 }
-    },
-    // Basic audio configuration
-    audioCaptureDefaults: {
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-    },
-    // Only use officially supported options in the Room constructor
-    // These are important for avatar compatibility
-    stopLocalTrackOnUnpublish: false
-  }));
-
-  // Helper function to toggle audio on/off
-  const toggleAudio = useCallback(() => {
-    setAudioEnabled(prev => {
-      const newState = !prev;
-      // Also enable/disable microphone in LiveKit
-      try {
-        const localParticipant = roomInstance.localParticipant;
-        if (localParticipant) {
-          const micTrack = localParticipant.getTrackPublication(Track.Source.Microphone);
-          if (micTrack) {
-            if (newState) {
-              micTrack.unmute();
-            } else {
-              micTrack.mute();
-            }
-          }
-        }
-      } catch (err) {
-        console.error('Error toggling microphone:', err);
-      }
-      return newState;
-    });
-  }, [roomInstance]);
+// Component to log all audio tracks in the room
+const AudioTracksLogger: React.FC = () => {
+  const room = useRoomContext();
+  const remoteParticipants = useRemoteParticipants();
   
-  // Helper function to toggle camera on/off
-  const toggleCamera = useCallback(async () => {
-    try {
-      // Get local participant
-      const localParticipant = roomInstance.localParticipant;
-      if (!localParticipant) {
-        console.error('No local participant found');
-        return;
-      }
-      
-      // Check if camera is currently enabled
-      const currentState = videoEnabled;
-      const newState = !currentState;
-      
-      if (newState) {
-        // Enable camera
-        console.log('Enabling camera...');
-        await localParticipant.setCameraEnabled(true);
-        console.log('Camera enabled successfully');
-      } else {
-        // Disable camera
-        console.log('Disabling camera...');
-        await localParticipant.setCameraEnabled(false);
-        console.log('Camera disabled successfully');
-      }
-      
-      // Update state
-      setVideoEnabled(newState);
-    } catch (err) {
-      console.error('Error toggling camera:', err);
-    }
-  }, [roomInstance, videoEnabled]);
-
-  // Function to enable microphone with auto-reconnect
-  const enableMicrophone = useCallback(async () => {
-    try {
-      if (roomInstance) {
-        await roomInstance.localParticipant.setMicrophoneEnabled(true);
-        setAudioEnabled(true);
-        console.log('Microphone enabled');
-        
-        // Set up a heartbeat to keep the microphone active
-        const heartbeatInterval = setInterval(async () => {
-          if (roomInstance && !roomInstance.localParticipant.isMicrophoneEnabled) {
-            console.log('Microphone heartbeat - reconnecting microphone');
-            try {
-              await roomInstance.localParticipant.setMicrophoneEnabled(true);
-            } catch (err) {
-              console.error('Failed to reconnect microphone in heartbeat:', err);
-            }
-          }
-        }, 5000); // Check every 5 seconds
-        
-        // Store the interval ID for cleanup
-        setMicHeartbeat(heartbeatInterval);
-      }
-    } catch (error) {
-      console.error('Failed to enable microphone:', error);
-    }
-  }, [roomInstance]);
-
-  // Function to initialize audio context after user interaction
-  const initializeAudio = useCallback(() => {
-    // Skip audio initialization if this page type doesn't need audio
-    if (hideAudio) {
-      setAudioInitialized(true);
-      return;
-    }
-    
-    console.log('Initializing audio...');
-    
-    // Request microphone permission explicitly
-    navigator.mediaDevices.getUserMedia({ audio: true })
-      .then(stream => {
-        console.log('Microphone permission granted, stream tracks:', stream.getTracks().length);
-        
-        // Create a temporary audio context to ensure browser allows audio
-        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-        
-        // Resume the audio context
-        if (audioContext.state === 'suspended') {
-          audioContext.resume().then(() => {
-            console.log('Audio context resumed');
-          });
-        }
-        
-        // Stop the local tracks as LiveKit will manage them
-        stream.getTracks().forEach(track => track.stop());
-        
-        // Set audio as initialized
-        setAudioInitialized(true);
-        
-        // Enable microphone after audio initialization
-        enableMicrophone();
-      })
-      .catch(err => {
-        console.error('Error getting microphone permission:', err);
-        alert('Microphone permission is required for this application. Please enable it in your browser settings.');
-      });
-  }, [hideAudio, enableMicrophone]);
-
-  // Connect to LiveKit room when component mounts and audio is initialized
   useEffect(() => {
-    let mounted = true;
-    let audioContext: AudioContext | null = null;
-
-    const connectToRoom = async () => {
-      try {
-        console.log(`Connecting to room: ${roomName} as ${userName}`);
+    if (!room) return;
+    
+    // Add a listener for new track subscriptions
+    const handleTrackSubscribed = (track: any, publication: any, participant: any) => {
+      console.log('Global Audio Monitor: New track subscribed', {
+        trackSid: track?.sid,
+        source: track?.source,
+        kind: track?.kind,
+        isEnabled: track?.isEnabled,
+        participantIdentity: participant?.identity,
+      });
+      
+      // Check if this is an audio track and log detailed information
+      if (track?.kind === 'audio') {
+        console.log('Global Audio Monitor: AUDIO TRACK AVAILABLE', {
+          trackSid: track?.sid,
+          source: track?.source,
+          isEnabled: track?.isEnabled,
+          participantIdentity: participant?.identity,
+        });
         
-        // Use the dedicated token service URL from config
-        const tokenUrl = getTokenEndpointUrl(roomName, userName);
+        // Monitor when this track is started/stopped
+        track.on('started', () => {
+          console.log(`Global Audio Monitor: Audio track ${track.sid} STARTED playing`); 
+        });
         
-        // Setup request options including API key header if configured
-        const fetchOptions: RequestInit = {
-          headers: {}
-        };
-        
-        if (tokenServiceConfig.includeApiKeyInClient && tokenServiceConfig.apiKey) {
-          (fetchOptions.headers as Record<string, string>)['x-api-key'] = tokenServiceConfig.apiKey;
-        }
-        
-        // Fetch token from dedicated service
-        const resp = await fetch(tokenUrl, fetchOptions);
-        
-        if (!resp.ok) {
-          throw new Error(`Failed to get token: ${resp.status} ${resp.statusText}`);
-        }
-        
-        const data = await resp.json();
-        if (!mounted) return;
-        
-        if (data.token) {
-          setToken(data.token);
-          await roomInstance.connect(process.env.NEXT_PUBLIC_LIVEKIT_URL || data.wsUrl, data.token);
-          console.log('Successfully connected to LiveKit room');
-          
-          // Configure audio handling for better avatar compatibility
-          if (showAvatar) {
-            // Set up enhanced track subscription handling
-            roomInstance.on('trackSubscribed', (track, publication, participant) => {
-              console.log(`🎧 Track subscribed: ${track.kind} from ${participant.identity}`);
-              // Make sure all audio tracks are enabled
-              if (track.kind === 'audio') {
-                // Log details about the audio track
-                console.log('Audio track details:', {
-                  trackName: publication.trackName,
-                  isMuted: publication.isMuted,
-                  isEnabled: publication.isEnabled,
-                  participantId: participant.identity
-                });
-                
-                // Try to ensure track is playing
-                try {
-                  const audioElement = track.attach();
-                  audioElement.volume = 1.0;
-                  audioElement.muted = false;
-                  document.body.appendChild(audioElement); // Attach to DOM to enable audio
-                  console.log('Audio track attached to DOM');
-                } catch (err) {
-                  console.error('Failed to attach audio track:', err);
-                }
-              }
-            });
-          }
-          
-          // Notify parent component of room creation immediately after connecting
-          if (onRoomCreated) {
-            console.log('Calling onRoomCreated with room instance');
-            onRoomCreated(roomInstance);
-          }
-          
-          // Start AI agent
-          fetch(`/api/agent?room=${roomName}`).catch(e => 
-            console.error('Error starting AI agent:', e)
-          );
-        } else {
-          console.error('Failed to get token from API');
-        }
-      } catch (e) {
-        console.error('Error connecting to room:', e);
+        track.on('ended', () => {
+          console.log(`Global Audio Monitor: Audio track ${track.sid} ENDED playing`);
+        });
       }
     };
     
-    if (token) {
-      try {
-        // Set up event listeners for monitoring participants and tracks
-        roomInstance.on('participantConnected', (participant) => {
-          console.log(`Participant connected: ${participant.identity}`);
-          
-          // Log all tracks for this participant
-          const tracks = Array.from(participant.trackPublications.values());
-          console.log('Available tracks:', tracks.map(t => ({
-            kind: t.kind,
-            source: t.source,
-            trackSid: t.trackSid
-          })));
-        });
-        
-        roomInstance.on('trackSubscribed', (track, publication, participant) => {
-          console.log(`Track subscribed: ${track.kind} from ${participant.identity}`);
-          console.log('Track details:', { 
-            trackSid: publication.trackSid,
-            source: publication.source,
-            kind: track.kind
-          });
-        });
-        
-        // Connect to the room
-        connectToRoom();
-        console.log("Connecting to room...");
-      } catch (err) {
-        console.error("Error connecting to room:", err);
+    room.on(RoomEvent.TrackSubscribed, handleTrackSubscribed);
+    
+    // Log all existing tracks on mount
+    console.log('Global Audio Monitor: All remote participants:', 
+      remoteParticipants.map(p => ({ 
+        identity: p.identity, 
+        audioTracks: Array.from(p.trackPublications.values())
+          .filter(pub => pub.kind === 'audio')
+          .map(pub => ({
+            sid: pub.trackSid,
+            source: pub.source,
+            subscribed: pub.isSubscribed,
+            muted: pub.isMuted
+          }))
+      }))
+    );
+    
+    return () => {
+      room.off(RoomEvent.TrackSubscribed, handleTrackSubscribed);
+    };
+  }, [room, remoteParticipants]);
+  
+  return null; // Purely for logging, no UI
+};
+
+// New component to log audio tracks for a single participant
+const ParticipantAudioLogger: React.FC<{ participant: RemoteParticipant }> = ({ participant }) => {
+  // Query audio tracks using both Source.Audio and Source.Unknown to catch all possible sources
+  const audioTracksFromAudio = useTracks([{ source: Track.Source.Audio, participant }]);
+  const audioTracksFromUnknown = useTracks([{ source: Track.Source.Unknown, participant }]);
+  const audioTracksFromMicrophone = useTracks([{ source: Track.Source.Microphone, participant }]);
+  
+  // Use all track types to find anything that might be audio
+  const allTracks = useTracks([{ participant }]);
+  const possibleAudioTracks = allTracks.filter(track => 
+    track.publication?.kind === 'audio' || 
+    track.track?.kind === 'audio'
+  );
+
+  useEffect(() => {
+    console.log(
+      `LK Session Internal - ParticipantAudioLogger - Audio Tracks from Source.Audio for ${participant.identity}:`,
+      audioTracksFromAudio.map(ref => ({
+        sid: ref.publication?.trackSid,
+        subscribed: ref.publication?.isSubscribed,
+        muted: ref.publication?.isMuted,
+        kind: ref.publication?.kind,
+        source: ref.publication?.source,
+        trackName: ref.publication?.trackName,
+        isEnabled: ref.track?.isEnabled,
+      }))
+    );
+
+    console.log(
+      `LK Session Internal - ParticipantAudioLogger - Audio Tracks from Source.Unknown for ${participant.identity}:`,
+      audioTracksFromUnknown.map(ref => ({
+        sid: ref.publication?.trackSid,
+        subscribed: ref.publication?.isSubscribed,
+        muted: ref.publication?.isMuted,
+        kind: ref.publication?.kind,
+        source: ref.publication?.source,
+        trackName: ref.publication?.trackName,
+        isEnabled: ref.track?.isEnabled,
+      }))
+    );
+
+    console.log(
+      `LK Session Internal - ParticipantAudioLogger - Audio Tracks from Source.Microphone for ${participant.identity}:`,
+      audioTracksFromMicrophone.map(ref => ({
+        sid: ref.publication?.trackSid,
+        subscribed: ref.publication?.isSubscribed,
+        muted: ref.publication?.isMuted,
+        kind: ref.publication?.kind,
+        source: ref.publication?.source,
+        trackName: ref.publication?.trackName,
+        isEnabled: ref.track?.isEnabled,
+      }))
+    );
+
+    console.log(
+      `LK Session Internal - ParticipantAudioLogger - ALL possible audio tracks for ${participant.identity}:`,
+      possibleAudioTracks.map(ref => ({
+        sid: ref.publication?.trackSid,
+        subscribed: ref.publication?.isSubscribed,
+        muted: ref.publication?.isMuted,
+        kind: ref.publication?.kind,
+        source: ref.publication?.source,
+        trackName: ref.publication?.trackName,
+        isEnabled: ref.track?.isEnabled,
+      }))
+    );
+
+    // Also log raw track publications from the participant
+    const rawAudioPublications = Array.from(participant.trackPublications.values())
+      .filter(pub => pub.kind === 'audio');
+    
+    console.log(
+      `LK Session Internal - ParticipantAudioLogger - RAW Audio TrackPublications for ${participant.identity}:`,
+      rawAudioPublications.map(pub => ({
+        sid: pub.trackSid,
+        subscribed: pub.isSubscribed,
+        muted: pub.isMuted,
+        kind: pub.kind,
+        source: pub.source,
+        trackName: pub.trackName,
+      }))
+    );
+  }, [audioTracksFromAudio, audioTracksFromUnknown, audioTracksFromMicrophone, possibleAudioTracks, participant.identity, participant.name, participant.trackPublications]);
+
+  return null; // This component is only for logging
+};
+
+// Internal component to house logic that needs LiveKit context
+const LiveKitSessionInternal: React.FC<{ children: ReactNode; onDataReceived: (data: any) => void; }> = ({ children, onDataReceived }) => {
+  console.log('LK Session Internal: Rendering');
+  const room = useRoomContext(); 
+  const { localParticipant } = useLocalParticipant(); 
+  const connectionStateValue = useConnectionState();
+  const remoteParticipants = useRemoteParticipants(); // Get remote participants
+  console.log('LK Session Internal: Connection State:', connectionStateValue);
+  const { sessionId, setSessionId, updateCurrentContext, currentContext } = useAppContext();
+
+  // Debugging remote participants and their audio tracks
+  useEffect(() => {
+    console.log('LK Session Internal: Remote Participants Changed:', remoteParticipants.map(p => ({id: p.identity, name: p.name, tracks: Array.from(p.trackPublications.values()).map((pub: TrackPublication) => pub.source)})));
+    remoteParticipants.forEach(participant => {
+      console.log(`LK Session Internal: Monitoring participant ${participant.identity}`);
+      participant.on(RoomEvent.TrackPublished, (trackPublication) => {
+        console.log(`LK Session Internal: Track PUBLISHED for ${participant.identity}: ${trackPublication.source}, SID: ${trackPublication.trackSid}`);
+        if (trackPublication.source === Track.Source.Audio) {
+          console.log(`LK Session Internal: Audio track published by ${participant.identity}. Subscribing if not already.`);
+          // Subscription usually happens automatically or is managed by RoomAudioRenderer
+        }
+      });
+      participant.on(RoomEvent.TrackUnpublished, (trackPublication) => {
+        console.log(`LK Session Internal: Track UNPUBLISHED for ${participant.identity}: ${trackPublication.source}, SID: ${trackPublication.trackSid}`);
+      });
+      participant.on(RoomEvent.TrackSubscribed, (track, trackPublication) => {
+        console.log(`LK Session Internal: Track SUBSCRIBED for ${participant.identity}: ${track.source}, SID: ${track.sid}`);
+      });
+      participant.on(RoomEvent.TrackUnsubscribed, (track, trackPublication) => {
+        console.log(`LK Session Internal: Track UNSUBSCRIBED for ${participant.identity}: ${track.source}, SID: ${track.sid}`);
+      });
+      participant.on(RoomEvent.TrackMuted, (trackPublication) => {
+        console.log(`LK Session Internal: Track MUTED for ${participant.identity}: ${trackPublication.source}`);
+      });
+      participant.on(RoomEvent.TrackUnmuted, (trackPublication) => {
+        console.log(`LK Session Internal: Track UNMUTED for ${participant.identity}: ${trackPublication.source}`);
+      });
+    });
+
+    // Cleanup listeners when component unmounts or participants change
+    return () => {
+      remoteParticipants.forEach(participant => {
+        // Consider how to best remove specific listeners if LiveKit SDK doesn't auto-clean on participant disconnect
+        // For now, relying on SDK's internal cleanup or new instances for new participants
+      });
+    };
+  }, [remoteParticipants]);
+
+  // Original useEffect for connection/room state
+  useEffect(() => {
+    console.log('LK Session Internal: Connection/Room Effect. State:', connectionStateValue, 'Room available:', !!room);
+    if (connectionStateValue === 'connected' && room) {
+      console.log('LK Session Internal: Connected. Full Room Object:', room);
+      console.log('LK Session Internal: Attempting to access room.name:', room.name);
+      // Attempt to access room's ID (Session ID) using roomID based on internal logs
+      const newSid = (room as any).roomInfo?.sid; 
+      console.log('LK Session Internal: Attempting to access room.roomInfo?.sid:', newSid);
+      if (typeof newSid === 'string' && newSid) {
+        setSessionId(newSid);
+        console.log(`LK Session Internal: Successfully set sessionId: ${newSid}`);
+        console.log(`LK Session Internal: Connected. Room ID (SID): ${newSid}, Local Participant ID: ${localParticipant?.identity}`);
+      } else {
+        console.warn(
+                `LK Session Internal: room.roomInfo?.sid is not a string starting with 'RM_' or is undefined/empty. Actual value: ${newSid}. This is unexpected. Room object:`,
+                room,
+            );
+        // Fallback or further error handling if sid is crucial and missing
       }
-    } else {
-      connectToRoom();
+      // Optionally, update other parts of currentContext upon connection if needed
+      // For example: updateCurrentContext({ task_stage: 'session_active_listening_for_agent' });
+    } else if (connectionStateValue === 'disconnected') {
+      setSessionId(''); // Clear session ID
+      // Optionally, update other parts of currentContext upon disconnection
+      // For example: updateCurrentContext({ task_stage: 'session_ended' });
+      console.log("LK Session Internal: Disconnected.");
     }
     
-    // Cleanup when component unmounts
-    return () => {
-      mounted = false;
-      // Clear the microphone heartbeat if it exists
-      if (micHeartbeat) {
-        clearInterval(micHeartbeat);
+    // Error handling is primarily managed by the onError prop of the <LiveKitRoom> component.
+    // This useEffect focuses on state changes like connected/disconnected.
+
+  }, [room, connectionStateValue, setSessionId, updateCurrentContext, localParticipant]);
+
+  // Note: The complex data sending logic (sendInteractionDataToAgent, handleNavigateToSection, etc.)
+  // from the previous version of LiveKitSessionContextualLogic would also go here if it's intended to be part of this component's responsibility
+  // and if it needs direct access to `localParticipant` or `room` from context.
+  // For now, this internal component focuses on context setup (sessionId) and logging connection state.
+  // The primary data reception is handled by LiveKitRoom's onDataReceived prop.
+
+  useEffect(() => {
+    if (room && onDataReceived) {
+      const handleData = (
+        payload: Uint8Array,
+        p?: RemoteParticipant, // Renamed to avoid conflict with localParticipant from hook
+        kind?: DataPacket_Kind
+      ) => {
+        const dataStr = new TextDecoder().decode(payload);
+        try {
+          const jsonData = JSON.parse(dataStr);
+          onDataReceived(jsonData); // Forward to RoxPage's handler
+        } catch (e) {
+          console.error('LK Session Internal: Failed to parse data packet:', e);
+        }
+      };
+
+      room.on(RoomEvent.DataReceived, handleData);
+      return () => {
+        room.off(RoomEvent.DataReceived, handleData);
+      };
+    }
+  }, [room, onDataReceived]);
+
+  // Function to send interaction data to the agent, structured as FrontendDataChannelMessage
+  const sendInteractionDataToAgent = async (interactionPayload: InteractionContextPayload) => {
+    if (localParticipant && room) {
+      try {
+        const messageForAgent: FrontendDataChannelMessage = {
+          type: "student_interaction_context",
+          payload: interactionPayload
+        };
+        const encodedData = new TextEncoder().encode(JSON.stringify(messageForAgent));
+        await localParticipant.publishData(encodedData, { reliable: true });
+        console.log('LK Session Internal: Sent FrontendDataChannelMessage to agent:', messageForAgent);
+      } catch (error) {
+        console.error('LK Session Internal: Error sending interaction data to agent:', error);
       }
-      
-      roomInstance.disconnect();
-      console.log('Disconnected from LiveKit room');
-    };
-  }, [roomInstance, roomName, userName, audioInitialized, hideAudio, micHeartbeat]);
-
-  // Show audio initialization prompt if audio isn't initialized yet
-  if (!audioInitialized && !hideAudio) {
-    return (
-      <div className="figma-room-container">
-        <div className="figma-content">
-          <h3>Enable Audio</h3>
-          <p>To participate in this session, we need permission to use your microphone.</p>
-          <button 
-            className="figma-button"
-            onClick={initializeAudio}
-          >
-            Click to Enable Audio
-          </button>
-        </div>
-      </div>
-    );
-  } else if (!audioInitialized && hideAudio) {
-    // If audio is disabled for this page type, simply skip initialization
-    setAudioInitialized(true);
-  }
-  
-  // Show loading state while waiting for token
-  if (token === '') {
-    return <div className="figma-room-container">
-      <div className="figma-content">Connecting to session...</div>
-    </div>;
-  }
-
-  // Handle leaving the session
-  const handleLeave = () => {
-    // Call the onLeave callback if provided, but don't redirect
-    if (onLeave) {
-      onLeave();
     } else {
-      console.log('Session ended - no redirect');
-      // Clean up room connection
-      roomInstance.disconnect();
+      console.warn('LK Session Internal: Local participant or room not available to send data.');
     }
   };
 
+  // Example handler logic that updates context and sends data to the agent.
+  // This function would typically be called by a UI element's event handler (e.g., a button click in a child component).
+  const handleExampleInteraction = (interactionType: string, payload: any) => {
+    // Step 1: Update current context
+    const contextUpdatePayload = {
+      last_interaction: {
+        type: interactionType,
+        payload: payload,
+        timestamp: new Date().toISOString(),
+      },
+      // You could add more context updates here based on the interaction
+    };
+    updateCurrentContext(contextUpdatePayload);
+    console.log('LK Session Internal: Context updated due to interaction:', contextUpdatePayload);
+
+    // Step 2: Construct InteractionContextPayload and send to agent
+    // The global currentContext from useAppContext() is now updated by updateCurrentContext call above,
+    // so it includes last_interaction and any task_stage changes reflected by that update.
+    if (!sessionId) {
+      console.error('LK Session Internal: Session ID is not available. Cannot send interaction to agent.');
+      return;
+    }
+
+    const interactionDataForBackend: InteractionContextPayload = {
+      current_context: {
+        ...currentContext, // This is the full, most up-to-date context from AppContext
+        // task_stage might have been updated by updateCurrentContext if logic for it was included there
+        // or, more explicitly, it could be set here:
+        // task_stage: determineNewTaskStage(interactionType, currentContext.task_stage),
+      },
+      session_id: sessionId,
+      // Example of handling transcript_if_relevant based on interaction type
+      transcript_if_relevant: interactionType === 'text_submission' && payload?.text ? payload.text : null,
+    };
+
+    sendInteractionDataToAgent(interactionDataForBackend);
+  };
+
+  // To make handleExampleInteraction usable by child components (e.g., buttons in rox/page.tsx),
+  // you might pass it down via props or make it available through AppContext.
+  // For example, if children were React elements, you could clone them and add props:
+  // React.Children.map(children, child => 
+  //   React.isValidElement(child) ? React.cloneElement(child, { handleExampleInteraction } as any) : child
+  // )
+  // Or, more robustly, expose it via a context provider wrapping these children if many need it.
 
   return (
-    <RoomContext.Provider value={roomInstance}>
-      <LiveKitSessionUI
-        token={token}
-        pageType={pageType}
-        sessionTitle={sessionTitle}
-        questionText={questionText}
-        userName={userName}
-        audioEnabled={audioEnabled}
-        videoEnabled={videoEnabled}
-        hideAudio={hideAudio}
-        hideVideo={hideVideo}
-        showTimer={showTimer}
-        toggleAudio={toggleAudio}
-        toggleCamera={toggleCamera}
-        handleLeave={handleLeave}
-        customControls={customControls}
-      >
-        {/* AI Agent Controller - silently initialized in the background */}
-        {aiAssistantEnabled && audioInitialized && (
-          <div className="hidden">
-            <AgentController 
-              roomName={roomName} 
-              pageType={pageType} 
-              showAvatar={showAvatar}
-            />
-          </div>
-        )}
-        
-        {/* Audio renderer for LiveKit audio playback */}
-        {token && <RoomAudioRenderer />}
-      </LiveKitSessionUI>
-    </RoomContext.Provider>
+    <>
+      {/* Temporary Test Button */}
+      <div style={{ position: 'absolute', top: '10px', left: '10px', zIndex: 1000 }}>
+        <button 
+          onClick={() => handleExampleInteraction("test_button_click", { info: "Test interaction from LiveKitSessionInternal", timestamp: new Date().toISOString() })}
+          style={{ padding: '8px 12px', backgroundColor: 'lightgreen', border: '1px solid green', borderRadius: '4px', cursor: 'pointer' }}
+        >
+          Test Interaction
+        </button>
+      </div>
+      {remoteParticipants.map(p => (
+        <ParticipantAudioLogger participant={p} key={p.sid} />
+      ))}
+      {children}
+    </>
   );
-}
+};
+
+// Main exported component
+export const LiveKitSession: React.FC<LiveKitSessionProps> = ({ token, serverUrl, onDataReceived, children }) => {
+  console.log('LK Session Wrapper: Rendering with props:', { token: token ? 'Token_Exists' : 'No_Token', serverUrl });
+
+  if (!token || !serverUrl) {
+    console.warn("LiveKitSession: Token or Server URL is missing. LiveKitRoom will not be rendered.");
+    // Render children directly if no token/URL, they won't have LiveKit context.
+    // Or display a specific message/component.
+    return (
+        <div>
+            <p>LiveKit is not configured (missing token or server URL).</p>
+            {children} {/* Render children so UI doesn't completely break if this is recoverable */}
+        </div>
+    );
+  }
+
+  console.log('LK Session: Setting up LiveKitRoom with RoomAudioRenderer');
+
+  return (
+    <LiveKitRoom
+      onError={(error) => {
+        console.error('LK Session: LiveKitRoom onError:', error);
+        // Optionally, you could set an error state here to display to the user
+      }}
+      token={token}
+      serverUrl={serverUrl}
+      connect={true}
+      audio={true} // Main audio elements likely handled by SimpleTavusDisplay or specific components
+      video={false} // Main video elements likely handled by SimpleTavusDisplay or specific components
+      // onDataReceived is handled by LiveKitSessionInternal now
+      onDisconnected={() => console.log("LiveKitRoom component: Disconnected")}
+      onConnected={() => console.log("LiveKitRoom component: Connected and ready for audio")}
+    >
+      <LiveKitSessionInternal onDataReceived={onDataReceived}>
+        {children}
+      </LiveKitSessionInternal>
+      {/* Audio track debugging */}
+      <div style={{ display: 'none' }}>
+        <p>Audio renderer present</p>
+      </div>
+      {/* Use hook to monitor all audio tracks in the room */}
+      <AudioTracksLogger />
+      <RoomAudioRenderer />
+    </LiveKitRoom>
+  );
+};
+
+export default LiveKitSession;
