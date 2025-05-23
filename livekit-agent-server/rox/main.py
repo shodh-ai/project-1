@@ -101,6 +101,7 @@ class RoxAgent(agents.Agent):
         self._initializing_base_voice_agent = True
         super().__init__(instructions=instructions)
         self._initializing_base_voice_agent = False
+        self.ctx: Optional[agents.JobContext] = None # Initialize JobContext storage
 
         self._room = room
         self._page_path = page_path
@@ -113,9 +114,6 @@ class RoxAgent(agents.Agent):
         self._latest_session_id: Optional[str] = None
         self._latest_transcript_from_data: Optional[str] = None
 
-        # Register a synchronous wrapper for room data events AFTER other initializations
-        self._room.on("data_received", self._sync_handle_room_data_event)
-        logger.info("RoxAgent.__init__: Registered _sync_handle_room_data_event for room data.")
         logger.info(f"RoxAgent __init__: self._page_path set to: {self._page_path}")
 
         logger.info(f"RoxAgent INSTANCE BEING INITIALIZED. page_path: {self._page_path}, GLOBAL_AVATAR_ENABLED: {GLOBAL_AVATAR_ENABLED}")
@@ -156,6 +154,51 @@ class RoxAgent(agents.Agent):
             logger.info("RoxAgent __init__: Tavus avatar is NOT enabled.")
         logger.info("RoxAgent __init__ COMPLETED.")
 
+    async def setup(self, ctx: agents.JobContext):
+        self.ctx = ctx
+        await super().setup(ctx) # Call parent's setup
+        logger.info(f"RoxAgent setup complete. Room: {self.ctx.room.name if self.ctx and self.ctx.room else 'Unknown'}")
+
+        # Register RPC handlers that the frontend can call on THIS agent instance
+        # The name "updateAgentContext" is what the frontend will use.
+        try:
+            self.rpc.register_handler("updateAgentContext", self.handle_update_agent_context)
+            # `self.rpc` is available on an `agents.Agent` instance.
+            # It allows registering handlers for incoming RPC requests targeted at this agent.
+            logger.info("RoxAgent: RPC handler 'updateAgentContext' registered.")
+        except Exception as e:
+            logger.error(f"RoxAgent: Error registering RPC handler: {e}", exc_info=True)
+        
+        # Comment from user's snippet regarding data_received listener:
+        # You can keep your data_received listener for other purposes or if you want a hybrid approach initially,
+        # but for sending context, we'll now focus on RPC.
+        # If you transition fully, you might remove the data_received listener related to context.
+        # self.ctx.room.on("data_received", self._sync_handle_room_data_event) 
+
+    async def handle_update_agent_context(self, 
+                                          # Arguments must match what frontend sends
+                                          # The LiveKit Python SDK RPC will map keyword arguments from the client
+                                          # or positional if client sends a list.
+                                          # Let's assume frontend sends an object with these keys.
+                                          current_context: Dict[str, Any], 
+                                          session_id: str,
+                                          # Optional: participant who sent the request (injected by SDK)
+                                          # request_participant: rtc.RemoteParticipant = None 
+                                          ) -> Dict[str, Any]: # RPC functions can return values
+        
+        # participant_identity = request_participant.identity if request_participant else "Unknown (RPC)"
+        logger.info(f"RoxAgent: RPC 'updateAgentContext' called. Session ID: {session_id}")
+        logger.debug(f"RoxAgent: Received current_context via RPC: {current_context}")
+
+        self._latest_student_context = current_context
+        self._latest_session_id = session_id
+        
+        logger.info(f"RoxAgent: Stored via RPC - _latest_student_context: {self._latest_student_context}")
+        logger.info(f"RoxAgent: Stored via RPC - _latest_session_id: {self._latest_session_id}")
+
+        # Optionally return an acknowledgement
+        return {"status": "Context updated successfully on agent", "received_session_id": session_id}
+
     @property
     def realtime_llm_session(self):
         if hasattr(self, '_initializing_base_voice_agent') and self._initializing_base_voice_agent:
@@ -179,118 +222,6 @@ class RoxAgent(agents.Agent):
         else:
             logger.warning("NO AUDIO URL PROVIDED - Speech not generated!")
 
-    async def on_data_received(self, dp: rtc.DataPacket):
-        print("RoxAgent.on_data_received ENTERED VIA PRINT", flush=True)
-        logger.info("RoxAgent.on_data_received ENTERED VIA LOGGER")
-        logger.debug(f"RoxAgent.on_data_received ENTERED. Data from: {dp.participant.identity if dp.participant else 'Unknown Participant SID (dp.participant_sid)'}, Kind: {dp.kind}")
-        data_str = ""
-        try:
-            if not (dp.kind == 1 or dp.kind == 0):  # 1 for RELIABLE, 0 for LOSSY
-                logger.warning(f"RoxAgent.on_data_received: Received packet with unexpected kind: {dp.kind}. Expected RELIABLE or LOSSY.")
-                # Decide if you want to return or attempt to process anyway if 'dp.data' might still be valid.
-                # For now, let's assume it might be an error to proceed without the expected kind.
-                # If dp.data is guaranteed, this check might be too strict.
-                # However, the original code implied payload_bytes might not be set if kind isn't right.
-                # Let's ensure payload_bytes is initialized.
-                payload_bytes = b'' # Initialize to empty bytes
-            else:
-                payload_bytes = dp.data
-
-            if not payload_bytes:
-                logger.warning("RoxAgent.on_data_received: No payload_bytes found in DataPacket or packet kind was not RELIABLE/LOSSY.")
-                return # Exit if no data to process
-
-            participant_who_sent = dp.participant
-            topic = dp.topic
-
-            participant_identity = "Unknown"
-            if participant_who_sent:
-                if hasattr(participant_who_sent, 'identity') and participant_who_sent.identity:
-                    participant_identity = participant_who_sent.identity
-                elif isinstance(participant_who_sent, str):
-                    participant_identity = participant_who_sent
-                else:
-                    participant_identity = getattr(participant_who_sent, 'sid', str(participant_who_sent))
-
-            logger.info(f"RoxAgent.on_data_received: Data from participant '{participant_identity}', topic '{topic}'")
-            
-            data_str = payload_bytes.decode('utf-8')
-            logger.debug(f"RoxAgent.on_data_received: Decoded data string: {data_str[:250]}...")
-            
-            message = json.loads(data_str) # This can raise JSONDecodeError
-            
-            if isinstance(message, dict) and message.get('type') == 'student_interaction_context':
-                logger.info("RoxAgent: Parsed 'student_interaction_context' message.")
-                interaction_payload = message.get('payload')
-                if isinstance(interaction_payload, dict):
-                    self._latest_student_context = interaction_payload.get('current_context')
-                    self._latest_session_id = interaction_payload.get('session_id')
-                    logger.info(f"RoxAgent._handle_room_data_event: Attempting to store context. Received current_context: {self._latest_student_context}, session_id: {self._latest_session_id}")
-                    if self._latest_student_context and self._latest_session_id:
-                        logger.info(f"RoxAgent Stored Context: UserID='{self._latest_student_context.get('user_id') if self._latest_student_context else 'N/A'}', TaskStage='{self._latest_student_context.get('task_stage') if self._latest_student_context else 'N/A'}', SessionID='{self._latest_session_id}'")
-                    else:
-                        logger.warning(f"RoxAgent._handle_room_data_event: Failed to store context fully. current_context is {'present' if self._latest_student_context else 'MISSING'}, session_id is {'present' if self._latest_session_id else 'MISSING'}.")
-                else:
-                    logger.warning("RoxAgent: 'payload' in 'student_interaction_context' is not a dictionary or missing.")
-            # ... other message type handling ...
-
-        except json.JSONDecodeError:
-            logger.error(f"RoxAgent: Failed to decode JSON from data packet: {data_str}", exc_info=True) # Added exc_info for more details
-        except UnicodeDecodeError:
-            logger.error(f"RoxAgent: Failed to decode payload_bytes as UTF-8.", exc_info=True)
-        except Exception as e:
-            logger.error(f"RoxAgent: Unexpected error processing data packet in on_data_received: {e}", exc_info=True)
-        finally:
-            logger.debug("RoxAgent.on_data_received EXITED")
-
-    def _sync_handle_room_data_event(self, *args, **kwargs):
-        logger.info(f"RoxAgent._sync_handle_room_data_event: ENTERED. Raw Args: {args}, Raw Kwargs: {kwargs}")
-        if len(args) == 3:
-            payload, participant, topic = args
-            # Ensure participant is either None or has an identity attribute before accessing it
-            participant_identity = "Unknown or N/A"
-            if participant and hasattr(participant, 'identity'):
-                participant_identity = participant.identity
-            elif participant:
-                participant_identity = str(participant) # Fallback if no identity attr
-            
-            logger.info(f"RoxAgent._sync_handle_room_data_event: Correct number of args received. Scheduling async handler. Topic: {topic}, Participant: {participant_identity}")
-            asyncio.create_task(self._handle_room_data_event(payload, participant, topic))
-        elif len(args) == 1 and isinstance(args[0], rtc.DataPacket):
-            dp = args[0]
-            logger.info(f"RoxAgent._sync_handle_room_data_event: Received a single DataPacket. Participant: {dp.participant.identity if dp.participant else 'N/A'}, Topic: {dp.topic}")
-            # If this path is taken, _handle_room_data_event should be adapted or a new one created for DataPacket
-            # For now, let's try to adapt. This assumes _handle_room_data_event can take a DataPacket directly or we modify it.
-            # This is a temporary measure for debugging. The ideal is to match the actual emitted signature.
-            logger.info("RoxAgent._sync_handle_room_data_event: Attempting to call _handle_room_data_event with dp.payload, dp.participant, dp.topic")
-            asyncio.create_task(self._handle_room_data_event(dp.data, dp.participant, dp.topic))
-        else:
-            logger.error(f"RoxAgent._sync_handle_room_data_event: Unexpected arguments received. Args count: {len(args)}, Kwargs count: {len(kwargs)}. Cannot schedule async handler.")
-
-    async def _handle_room_data_event(self, payload: bytes, participant: Optional[rtc.RemoteParticipant], topic: Optional[str]):
-        logger.info(f"RoxAgent._handle_room_data_event: Received data. Topic: {topic}, Participant: {participant.identity if participant else 'N/A'}")
-        logger.info(f"RoxAgent._handle_room_data_event: Received data from '{participant.identity if participant else 'N/A'}' on topic '{topic}'. Payload size: {len(payload)} bytes.")
-
-        # Construct a DataPacket-like object to pass to the original on_data_received method
-        # rtc.DataPacket itself is not meant to be instantiated directly by users.
-        # We'll create a simple class that has the necessary attributes.
-        class SimpleDataPacket:
-            def __init__(self, data, kind, participant_obj, topic_str):
-                self.data = data
-                self.kind = kind
-                self.participant = participant_obj # This will be the rtc.RemoteParticipant object
-                self.topic = topic_str
-
-        # Assuming data from room events is typically reliable. 
-        # If lossy packets are also expected and need different handling, this might need adjustment.
-        dp = SimpleDataPacket(data=payload,
-                              kind=1,  # Use integer 1 for RELIABLE to avoid AttributeError
-                              participant_obj=participant,
-                              topic_str=topic)
-        
-        # Call the original on_data_received method with the constructed packet
-        await self.on_data_received(dp)
-
 # Global configuration
 GLOBAL_PAGE_PATH = "roxpage"  
 GLOBAL_MODEL = "aura-asteria-en"    
@@ -307,10 +238,18 @@ async def entrypoint(ctx: agents.JobContext):
         ctx.identity = "rox-tavus-avatar-agent"
         logger.info(f"ENTRYPOINT: Set agent identity to: {ctx.identity} for Tavus avatar")
     else:
-        import uuid
-        id_suffix = uuid.uuid4().hex[:8]
-        ctx.identity = f"rox-agent-{id_suffix}"
-        logger.info(f"ENTRYPOINT: Set agent identity to: {ctx.identity}")
+        env_participant_name = os.getenv("PARTICIPANT_NAME")
+        logger.info(f"ENTRYPOINT: Value of env_participant_name read from os.getenv: '{env_participant_name}'")
+        if not env_participant_name:
+            logger.error("CRITICAL: PARTICIPANT_NAME not set in .env file or is empty. Agent cannot use configured identity.")
+            logger.warning("Generating a default dynamic identity as PARTICIPANT_NAME is missing/empty in .env.")
+            import uuid # Keep uuid import local to this fallback
+            id_suffix = uuid.uuid4().hex[:8]
+            ctx.identity = f"rox-agent-dynamic-fallback-{id_suffix}"
+        else:
+            ctx.identity = env_participant_name
+            logger.info(f"ENTRYPOINT: Using PARTICIPANT_NAME from .env for identity: '{ctx.identity}'")
+        logger.info(f"ENTRYPOINT: Final agent identity before connecting: {ctx.identity}")
 
     try:
         logger.info(f"ENTRYPOINT: Attempting to connect to LiveKit room '{ctx.room.name if ctx.room and ctx.room.name else 'details in ctx'}' with identity '{ctx.identity}'...")
